@@ -1,9 +1,12 @@
 import json
+from pathlib import Path
 import re
 from typing import Any
 
+import httpx2
 from pydantic import ValidationError
 
+from app.config import settings
 from app.core.enums import Sentiment
 from app.core.errors import InvalidLLMJSONError, LLMExtractionError
 from app.schemas.canonical_input import CanonicalInput
@@ -21,16 +24,23 @@ FORBIDDEN_SYSTEM_FIELDS = {
 
 
 class LLMService:
-    def __init__(self, model_name: str = "mock-memory-extractor"):
+    def __init__(
+        self,
+        model_name: str = "mock-memory-extractor",
+        base_url: str | None = None,
+        api_key: str | None = None,
+        timeout_seconds: float = 60.0,
+    ):
         self.model_name = model_name
+        self.base_url = base_url or settings.openai_compatible_base_url
+        self.api_key = api_key or settings.openai_compatible_api_key
+        self.timeout_seconds = timeout_seconds
 
     def extract_memory(self, canonical_input: CanonicalInput) -> ExtractionOutput:
         if self.model_name == "mock-memory-extractor":
             return self._mock_extract(canonical_input)
 
-        raise LLMExtractionError(
-            "Real OpenAI-compatible extraction is not configured yet."
-        )
+        return self._extract_with_chat_completions(canonical_input)
 
     def parse_extraction_json(self, raw_response: str) -> ExtractionOutput:
         try:
@@ -56,6 +66,55 @@ class LLMService:
         elif isinstance(payload, list):
             for item in payload:
                 self._reject_forbidden_fields(item)
+
+    def _extract_with_chat_completions(
+        self,
+        canonical_input: CanonicalInput,
+    ) -> ExtractionOutput:
+        if not self.base_url:
+            raise LLMExtractionError("OPENAI_COMPATIBLE_BASE_URL is not configured.")
+
+        system_prompt = _read_prompt("memory_extraction_system.md")
+        user_template = _read_prompt("memory_extraction_user_template.md")
+        user_prompt = (
+            user_template
+            .replace("{media_type}", canonical_input.media_type.value)
+            .replace("{content}", canonical_input.source_text)
+        )
+
+        payload = {
+            "model": self.model_name,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "response_format": {"type": "json_object"},
+            "temperature": 0,
+        }
+        headers = {"Content-Type": "application/json"}
+        if self.api_key and self.api_key != "replace_with_your_api_key":
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
+        try:
+            with httpx2.Client(timeout=self.timeout_seconds) as client:
+                response = client.post(
+                    _chat_completions_url(self.base_url),
+                    headers=headers,
+                    json=payload,
+                )
+                response.raise_for_status()
+                response_payload = response.json()
+        except Exception as exc:
+            raise LLMExtractionError("OpenAI-compatible extraction request failed.") from exc
+
+        try:
+            content = response_payload["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise InvalidLLMJSONError(
+                "Provider response did not include choices[0].message.content."
+            ) from exc
+
+        return self.parse_extraction_json(content)
 
     def _mock_extract(self, canonical_input: CanonicalInput) -> ExtractionOutput:
         text = canonical_input.source_text
@@ -170,3 +229,15 @@ def _dedupe(values: list[str]) -> list[str]:
             seen.add(key)
             deduped.append(value)
     return deduped
+
+
+def _read_prompt(filename: str) -> str:
+    prompt_path = Path(__file__).resolve().parents[1] / "prompts" / filename
+    return prompt_path.read_text(encoding="utf-8")
+
+
+def _chat_completions_url(base_url: str) -> str:
+    normalized = base_url.rstrip("/")
+    if normalized.endswith("/chat/completions"):
+        return normalized
+    return f"{normalized}/chat/completions"

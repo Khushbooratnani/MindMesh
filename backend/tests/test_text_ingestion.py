@@ -4,6 +4,7 @@ from app.core.enums import MediaType, Privacy
 from app.core.errors import EmptyTextError
 from app.schemas.ingestion_request import CurrentUser, TextIngestionRequest
 from app.services.ingestion_service import IngestionService
+from app.services.llm_service import LLMService
 from app.services.text_processor import TextProcessor
 
 
@@ -19,7 +20,9 @@ def test_text_ingestion_returns_valid_memory_v1():
         privacy=Privacy.GROUP,
     )
 
-    memory = IngestionService().ingest_text(
+    memory = IngestionService(
+        llm_service=LLMService(model_name="mock-memory-extractor")
+    ).ingest_text(
         request=request,
         current_user=CurrentUser(id="U17"),
     )

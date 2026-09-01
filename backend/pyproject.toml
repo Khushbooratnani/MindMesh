@@ -1,0 +1,21 @@
+[project]
+name = "mind-mesh-backend"
+version = "0.1.0"
+description = "Mind Mesh Phase 1 memory ingestion backend"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115.0",
+  "pydantic>=2.8.0",
+  "pydantic-settings>=2.4.0",
+  "uvicorn>=0.30.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "httpx2>=0.28.0",
+  "pytest>=8.0.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

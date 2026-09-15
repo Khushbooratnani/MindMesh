@@ -40,11 +40,17 @@ tmp/
 temp/
 *.sqlite
 *.sqlite3
+*.db
+*.db-journal
 
 # Uploaded or generated user media
 /uploads/
 /media/
 /storage/
+media_uploads/
+/media_uploads/
 
 # Generated output artifacts
 output/
+*_evaluation_results.json
+*.jsonl

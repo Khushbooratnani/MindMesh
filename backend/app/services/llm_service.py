@@ -3,7 +3,7 @@ from pathlib import Path
 import re
 from typing import Any
 
-import httpx2
+import httpx
 from pydantic import ValidationError
 
 from app.config import settings
@@ -96,7 +96,7 @@ class LLMService:
             headers["Authorization"] = f"Bearer {self.api_key}"
 
         try:
-            with httpx2.Client(timeout=self.timeout_seconds) as client:
+            with httpx.Client(timeout=self.timeout_seconds) as client:
                 response = client.post(
                     _chat_completions_url(self.base_url),
                     headers=headers,

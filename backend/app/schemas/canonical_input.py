@@ -1,6 +1,7 @@
 from pydantic import BaseModel
 
 from app.core.enums import MediaType, Privacy
+from app.schemas.memory_output import MediaReference
 
 
 class SystemContext(BaseModel):
@@ -9,6 +10,8 @@ class SystemContext(BaseModel):
     media_type: MediaType
     privacy: Privacy
     allowed_users: list[str]
+    media_reference: MediaReference | None = None
+    user_context: str | None = None
 
 
 class ProcessedInput(BaseModel):
@@ -22,3 +25,5 @@ class CanonicalInput(BaseModel):
     source_text: str
     raw_text: str | None = None
     source_context: SystemContext
+    media_reference: MediaReference | None = None
+    user_context: str | None = None

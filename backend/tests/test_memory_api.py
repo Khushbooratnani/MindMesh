@@ -81,3 +81,26 @@ def test_ingest_image_endpoint_returns_memory_v1():
     assert "cafe storefront" in payload["content"]["clean_text"]
     assert payload["processing"]["image_understanding_required"] is True
     app.dependency_overrides.clear()
+
+
+def test_ingest_image_endpoint_respects_max_image_size_limit(monkeypatch):
+    """Verify that image upload exceeding max_image_size_mb is rejected with FILE_TOO_LARGE."""
+    from app.config import settings
+    monkeypatch.setattr(settings, "max_image_size_mb", 1)
+
+    app.dependency_overrides[get_ingestion_service] = lambda: IngestionService(
+        image_processor=FakeImageProcessor(),
+        llm_service=LLMService(model_name="mock-memory-extractor"),
+    )
+    client = TestClient(app)
+
+    large_bytes = b"X" * (1100 * 1024)
+    response = client.post(
+        "/api/v1/memories/ingest/image",
+        data={"media_type": "image", "privacy": "ONLY_ME", "allowed_users": "[]"},
+        files={"file": ("large.jpg", large_bytes, "image/jpeg")},
+    )
+
+    assert response.status_code == 413
+    assert response.json()["error"]["code"] == "FILE_TOO_LARGE"
+    app.dependency_overrides.clear()

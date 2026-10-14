@@ -1,0 +1,161 @@
+INSERT INTO memories (
+    memory_id,
+    schema_version,
+    owner_id,
+    group_id,
+    media_type,
+    created_at,
+    privacy,
+    allowed_users,
+    raw_text,
+    clean_text,
+    description,
+    summary,
+    sentiment,
+    mentioned_dates,
+    inferred_time,
+    time_of_day,
+    processing_status,
+    source_modality,
+    transcription_required,
+    image_understanding_required,
+    llm_provider,
+    llm_model,
+    processing_errors
+) VALUES
+(
+    'M_7788c4a1dd9a4daf92af6d987176a110',
+    '1.0',
+    'U_DEVELOPMENT',
+    'G04',
+    'text',
+    '2026-09-01T16:54:28.102207+00:00',
+    'GROUP',
+    '{}',
+    'Had amazing coffee with Akshat at Cafe Bodega in Goa.',
+    'Had amazing coffee with Akshat at Cafe Bodega in Goa.',
+    'Had amazing coffee with Akshat at Cafe Bodega in Goa.',
+    'The user had an amazing coffee experience with Akshat at Cafe Bodega in Goa.',
+    'positive',
+    '{}',
+    NULL,
+    'unknown',
+    'completed',
+    'text',
+    false,
+    false,
+    'openai-compatible',
+    '/home/llmapi/models/Qwen3.8-27B',
+    '{}'
+),
+(
+    'M_8e2abc78c675492b940f3aa750198751',
+    '1.0',
+    'U_DEVELOPMENT',
+    'G04',
+    'image',
+    '2026-09-01T16:09:23.976136+00:00',
+    'GROUP',
+    '{}',
+    NULL,
+    'A close-up, eye-level shot looks across a round, honey-toned wooden table set in what appears to be a modern café or restaurant, with the background softly out of focus. On the table sit three items arranged in a row. On the left is a tall, straight-sided glass holding a layered iced coffee drink with a white straw. In the center is a stemmed glass filled with a frosted reddish-pink cocktail with a metal straw and garnish. To the right is a round white plate with a triangular slice of chocolate-glazed cheesecake and three small metal spoons. A black QR tile reads SCAN TO CONNECT, TABLE NUMBER 03, and FENSTER. The background shows a cozy modern cafe interior with track lighting, a mural, chairs, and a nighttime window view. No people are visible.',
+    'A close-up, eye-level view of a round honey-toned wooden table in a modern café or restaurant. On the table are a tall glass of layered iced coffee with a white straw, a stemmed glass of frosted reddish-pink cocktail with a metal straw and garnish, and a white plate holding a triangular chocolate-glazed cheesecake with three small metal spoons. A black square tile with a white QR code reads SCAN TO CONNECT, TABLE NUMBER 03, and FENSTER. The background shows a softly blurred seating area with modern lighting, a wall-mounted air-conditioning unit, wall decor, burgundy and blue seating, and a dark nighttime exterior. No people are visible.',
+    'A quiet modern café table with iced coffee, a pink cocktail, chocolate cheesecake, and a QR tile for table 03, set in a cozy evening interior.',
+    'positive',
+    '{}',
+    'evening',
+    'evening',
+    'completed',
+    'image',
+    false,
+    true,
+    'openai-compatible',
+    '/home/llmapi/models/Qwen3.8-27B',
+    '{}'
+)
+ON CONFLICT (memory_id) DO UPDATE SET
+    schema_version = EXCLUDED.schema_version,
+    owner_id = EXCLUDED.owner_id,
+    group_id = EXCLUDED.group_id,
+    media_type = EXCLUDED.media_type,
+    created_at = EXCLUDED.created_at,
+    privacy = EXCLUDED.privacy,
+    allowed_users = EXCLUDED.allowed_users,
+    raw_text = EXCLUDED.raw_text,
+    clean_text = EXCLUDED.clean_text,
+    description = EXCLUDED.description,
+    summary = EXCLUDED.summary,
+    sentiment = EXCLUDED.sentiment,
+    mentioned_dates = EXCLUDED.mentioned_dates,
+    inferred_time = EXCLUDED.inferred_time,
+    time_of_day = EXCLUDED.time_of_day,
+    processing_status = EXCLUDED.processing_status,
+    source_modality = EXCLUDED.source_modality,
+    transcription_required = EXCLUDED.transcription_required,
+    image_understanding_required = EXCLUDED.image_understanding_required,
+    llm_provider = EXCLUDED.llm_provider,
+    llm_model = EXCLUDED.llm_model,
+    processing_errors = EXCLUDED.processing_errors;
+
+INSERT INTO memory_entities (memory_id, entity_type, entity_value) VALUES
+('M_7788c4a1dd9a4daf92af6d987176a110', 'person', 'Akshat'),
+('M_7788c4a1dd9a4daf92af6d987176a110', 'place', 'Cafe Bodega'),
+('M_7788c4a1dd9a4daf92af6d987176a110', 'location', 'Goa'),
+('M_8e2abc78c675492b940f3aa750198751', 'place', 'modern café or restaurant'),
+('M_8e2abc78c675492b940f3aa750198751', 'location', 'round wooden table'),
+('M_8e2abc78c675492b940f3aa750198751', 'location', 'seating area'),
+('M_8e2abc78c675492b940f3aa750198751', 'location', 'window'),
+('M_8e2abc78c675492b940f3aa750198751', 'organization', 'FENSTER')
+ON CONFLICT DO NOTHING;
+
+INSERT INTO memory_topics (memory_id, topic) VALUES
+('M_7788c4a1dd9a4daf92af6d987176a110', 'coffee'),
+('M_7788c4a1dd9a4daf92af6d987176a110', 'cafe'),
+('M_7788c4a1dd9a4daf92af6d987176a110', 'Goa'),
+('M_7788c4a1dd9a4daf92af6d987176a110', 'social outing'),
+('M_8e2abc78c675492b940f3aa750198751', 'café'),
+('M_8e2abc78c675492b940f3aa750198751', 'restaurant'),
+('M_8e2abc78c675492b940f3aa750198751', 'drinks'),
+('M_8e2abc78c675492b940f3aa750198751', 'dessert'),
+('M_8e2abc78c675492b940f3aa750198751', 'iced coffee'),
+('M_8e2abc78c675492b940f3aa750198751', 'cocktail'),
+('M_8e2abc78c675492b940f3aa750198751', 'cheesecake'),
+('M_8e2abc78c675492b940f3aa750198751', 'QR code'),
+('M_8e2abc78c675492b940f3aa750198751', 'table number'),
+('M_8e2abc78c675492b940f3aa750198751', 'interior design'),
+('M_8e2abc78c675492b940f3aa750198751', 'evening ambiance')
+ON CONFLICT DO NOTHING;
+
+INSERT INTO memory_activities (memory_id, activity) VALUES
+('M_7788c4a1dd9a4daf92af6d987176a110', 'having coffee'),
+('M_7788c4a1dd9a4daf92af6d987176a110', 'meeting with a friend'),
+('M_8e2abc78c675492b940f3aa750198751', 'scanning QR code'),
+('M_8e2abc78c675492b940f3aa750198751', 'enjoying drinks'),
+('M_8e2abc78c675492b940f3aa750198751', 'enjoying dessert')
+ON CONFLICT DO NOTHING;
+
+INSERT INTO memory_moods (memory_id, mood) VALUES
+('M_7788c4a1dd9a4daf92af6d987176a110', 'happy'),
+('M_7788c4a1dd9a4daf92af6d987176a110', 'content'),
+('M_8e2abc78c675492b940f3aa750198751', 'calm'),
+('M_8e2abc78c675492b940f3aa750198751', 'cozy'),
+('M_8e2abc78c675492b940f3aa750198751', 'contemporary'),
+('M_8e2abc78c675492b940f3aa750198751', 'quiet')
+ON CONFLICT DO NOTHING;
+
+INSERT INTO memory_attributes (memory_id, key, value_json, confidence, source) VALUES
+('M_7788c4a1dd9a4daf92af6d987176a110', 'coffee_quality', '"amazing"', 0.95, 'llm'),
+('M_8e2abc78c675492b940f3aa750198751', 'table_number', '"03"', 0.99, 'llm'),
+('M_8e2abc78c675492b940f3aa750198751', 'qr_instruction', '"SCAN TO CONNECT"', 0.99, 'llm'),
+('M_8e2abc78c675492b940f3aa750198751', 'brand', '"FENSTER"', 0.95, 'llm'),
+('M_8e2abc78c675492b940f3aa750198751', 'items_on_table', '["layered iced coffee", "reddish-pink cocktail", "chocolate-glazed cheesecake", "three metal spoons", "QR tile"]', 0.98, 'llm'),
+('M_8e2abc78c675492b940f3aa750198751', 'people_visible', 'false', 0.99, 'llm'),
+('M_8e2abc78c675492b940f3aa750198751', 'lighting', '["track spotlights", "circular recessed light", "wall sconce"]', 0.9, 'llm'),
+('M_8e2abc78c675492b940f3aa750198751', 'furniture', '["mid-century armchairs", "burgundy upholstery", "blue upholstered chair", "wooden chairs with blue cushions"]', 0.9, 'llm'),
+('M_8e2abc78c675492b940f3aa750198751', 'wall_decor', '["black, beige, and tan line-art mural", "framed picture"]', 0.9, 'llm'),
+('M_8e2abc78c675492b940f3aa750198751', 'window_view', '"dark nighttime exterior with blurred lights and green foliage"', 0.9, 'llm'),
+('M_8e2abc78c675492b940f3aa750198751', 'setting', '"modern café or restaurant"', 0.95, 'llm')
+ON CONFLICT (memory_id, key) DO UPDATE SET
+    value_json = EXCLUDED.value_json,
+    confidence = EXCLUDED.confidence,
+    source = EXCLUDED.source;

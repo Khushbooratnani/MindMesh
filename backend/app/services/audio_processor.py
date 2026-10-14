@@ -15,7 +15,8 @@ class AudioProcessor:
         self.whisper_service = whisper_service or WhisperService()
 
     def process(self, file_path: Path) -> ProcessedInput:
-        if file_path.suffix.lower() not in SUPPORTED_AUDIO_EXTENSIONS:
+        is_ogg_content = file_path.read_bytes()[:4] == b"OggS"
+        if file_path.suffix.lower() not in SUPPORTED_AUDIO_EXTENSIONS and not is_ogg_content:
             raise UnsupportedFileFormatError("Unsupported audio format.")
 
         transcript = self.whisper_service.transcribe(file_path)

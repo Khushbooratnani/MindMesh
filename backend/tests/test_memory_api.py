@@ -43,7 +43,7 @@ def test_ingest_text_endpoint_returns_memory_v1():
 
     assert response.status_code == 200
     assert payload["schema_version"] == "1.0"
-    assert payload["system"]["owner_id"] == "U_DEVELOPMENT"
+    assert payload["system"]["owner_id"] == "U_MEHUL_01"
     assert payload["system"]["media_type"] == "text"
     assert payload["processing"]["status"] == "completed"
     app.dependency_overrides.clear()

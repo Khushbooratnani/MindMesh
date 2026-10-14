@@ -4,6 +4,10 @@
 # Root documentation drafts
 /*.md
 
+# Local project context and agent guidance
+/context.md
+/AGENTS.md
+
 # Python
 __pycache__/
 *.py[cod]
@@ -48,3 +52,9 @@ temp/
 
 # Generated output artifacts
 output/
+
+# Local datasets and one-off import/export artifacts
+/Archive.zip
+/combined_form_responses*.csv
+/phase1_dataset.jsonl
+/phase1_results.jsonl

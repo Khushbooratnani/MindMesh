@@ -18,6 +18,10 @@ class ProcessedInput(BaseModel):
     media_type: MediaType
     raw_text: str | None = None
     clean_text: str
+    detected_language: str | None = None
+    language_probability: float | None = None
+    normalized_language: str | None = None
+    display_script: str | None = "latin"
 
 
 class CanonicalInput(BaseModel):
@@ -27,3 +31,6 @@ class CanonicalInput(BaseModel):
     source_context: SystemContext
     media_reference: MediaReference | None = None
     user_context: str | None = None
+    detected_language: str | None = None
+    normalized_language: str | None = None
+    display_script: str | None = "latin"

@@ -19,11 +19,17 @@ class WhisperService:
         model_name: str | None = None,
         device: str | None = None,
         compute_type: str | None = None,
+        initial_prompt: str | None = None,
         mock_transcriber: Callable[[Path], dict[str, Any]] | None = None,
     ):
         self.model_name = model_name or settings.whisper_model
         self.device = device or settings.whisper_device
         self.compute_type = compute_type or settings.whisper_compute_type
+        self.initial_prompt = (
+            initial_prompt
+            if initial_prompt is not None
+            else getattr(settings, "whisper_initial_prompt", None)
+        )
         self.mock_transcriber = mock_transcriber
 
     def _get_model(self) -> Any:
@@ -54,7 +60,11 @@ class WhisperService:
                 ) from exc
         return self._MODEL_CACHE[cache_key]
 
-    def transcribe(self, file_path: Path) -> dict[str, Any]:
+    def transcribe(
+        self,
+        file_path: Path,
+        initial_prompt: str | None = None,
+    ) -> dict[str, Any]:
         """Transcribe an audio file and return a structured dictionary."""
         if not file_path.exists():
             raise TranscriptionFailedError(f"Audio file not found: {file_path}")
@@ -68,10 +78,17 @@ class WhisperService:
 
         try:
             model = self._get_model()
+            effective_prompt = initial_prompt if initial_prompt is not None else self.initial_prompt
+            transcribe_kwargs: dict[str, Any] = {
+                "beam_size": 5,
+                "vad_filter": True,
+            }
+            if effective_prompt:
+                transcribe_kwargs["initial_prompt"] = effective_prompt
+
             segments, info = model.transcribe(
                 str(file_path),
-                beam_size=5,
-                vad_filter=True,
+                **transcribe_kwargs,
             )
 
             segment_list = []

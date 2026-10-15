@@ -26,18 +26,18 @@ FORBIDDEN_SYSTEM_FIELDS = {
 class LLMService:
     def __init__(
         self,
-        model_name: str = "mock-memory-extractor",
+        model_name: str | None = None,
         base_url: str | None = None,
         api_key: str | None = None,
         timeout_seconds: float = 60.0,
     ):
-        self.model_name = model_name
+        self.model_name = model_name or settings.memory_extraction_model
         self.base_url = base_url or settings.openai_compatible_base_url
         self.api_key = api_key or settings.openai_compatible_api_key
         self.timeout_seconds = timeout_seconds
 
     def extract_memory(self, canonical_input: CanonicalInput) -> ExtractionOutput:
-        if self.model_name == "mock-memory-extractor":
+        if self.model_name == "mock-memory-extractor" or not self.base_url:
             return self._mock_extract(canonical_input)
 
         return self._extract_with_chat_completions(canonical_input)
@@ -148,6 +148,126 @@ class LLMService:
             },
             additional_attributes=_additional_attributes(text),
         )
+
+    def format_memories_context(self, memories: list[dict[str, Any]]) -> str:
+        context_blocks = []
+        for idx, mem in enumerate(memories, start=1):
+            content = mem.get("content", {})
+            entities = mem.get("entities", {})
+            semantics = mem.get("semantics", {})
+            temporal = mem.get("temporal", {})
+
+            block_lines = [f"Memory #{idx}:"]
+            summary = content.get("summary") or content.get("clean_text") or content.get("raw_text")
+            if summary:
+                block_lines.append(f"• Summary: {summary}")
+
+            people = entities.get("people") or entities.get("person")
+            if people:
+                block_lines.append(f"• People: {', '.join(people) if isinstance(people, list) else str(people)}")
+
+            places = entities.get("places") or entities.get("place")
+            if places:
+                block_lines.append(f"• Places: {', '.join(places) if isinstance(places, list) else str(places)}")
+
+            topics = semantics.get("topics")
+            if topics:
+                block_lines.append(f"• Topics: {', '.join(topics) if isinstance(topics, list) else str(topics)}")
+
+            dates = temporal.get("mentioned_dates")
+            if dates:
+                block_lines.append(f"• Dates: {', '.join(dates) if isinstance(dates, list) else str(dates)}")
+
+            context_blocks.append("\n".join(block_lines))
+        return "\n\n".join(context_blocks)
+
+    def answer_from_memories(
+        self,
+        query: str,
+        memories: list[dict[str, Any]],
+    ) -> str:
+        """Generates natural answer grounded ONLY in the retrieved MemoryV1 payloads."""
+        if not memories or not query or not query.strip():
+            return "I couldn't find a relevant memory matching your query."
+
+        if self.base_url:
+            try:
+                context = self.format_memories_context(memories)
+                system_prompt = (
+                    "You are MindMesh, an AI personal memory assistant speaking directly to the user.\n"
+                    "Answer the user's question directly and conversationally using ONLY the provided memory records.\n\n"
+                    "CORE RULES:\n"
+                    "1. Point of View / Direct Address:\n"
+                    "   - Always address the user directly in the second person ('you', 'your').\n"
+                    "   - NEVER refer to the current user in the third person as 'the user', 'the speaker', or 'user'.\n"
+                    "   - NEVER refer to the current user by name (e.g. 'Mehul') merely because the memory or summary contains that name.\n"
+                    "   - Example: Instead of 'The user went to Panjim' or 'Mehul went to Panjim', say 'You went to Panjim'.\n"
+                    "   - Example: Instead of 'The user had good momos at Nanda Ki Chowki', say 'You had good momos at Nanda Ki Chowki' or 'You can try the momos at Nanda Ki Chowki'.\n"
+                    "2. Preserve Question Intent & Natural Grammatical Form:\n"
+                    "   - For confirmation questions (e.g. 'Did I have coffee with Rohan?'), answer naturally (e.g. 'Yes, you had filter coffee with Rohan in Panjim.').\n"
+                    "   - For activity questions (e.g. 'What did I do in Goa?'), answer naturally (e.g. 'You visited Goa and had dinner with...').\n"
+                    "   - For recommendation questions (e.g. 'Where can I get good food?'), answer naturally (e.g. 'You can try...').\n"
+                    "3. Strict Grounding & Factuality:\n"
+                    "   - Base your answer strictly on the provided memory records.\n"
+                    "   - Do NOT invent facts, extrapolate, or hallucinate details not present in the memories.\n"
+                    "   - If the memories do not contain sufficient evidence to answer the question, state clearly that insufficient information exists in stored memories.\n"
+                    "   - Preserve uncertainty if the memory itself is uncertain.\n"
+                    "4. Conciseness: Keep the answer natural, concise, and focused."
+                )
+                messages = [
+                    {
+                        "role": "system",
+                        "content": system_prompt,
+                    },
+                    {
+                        "role": "user",
+                        "content": f"User Question: {query}\n\nRetrieved Memories:\n{context}",
+                    },
+                ]
+                headers = {"Content-Type": "application/json"}
+                if self.api_key and self.api_key != "replace_with_your_api_key":
+                    headers["Authorization"] = f"Bearer {self.api_key}"
+
+                with httpx.Client(timeout=30.0) as client:
+                    resp = client.post(
+                        _chat_completions_url(self.base_url),
+                        headers=headers,
+                        json={
+                            "model": self.model_name,
+                            "messages": messages,
+                            "temperature": 0.1,
+                        },
+                    )
+                    if resp.status_code == 200:
+                        content = resp.json()["choices"][0]["message"]["content"].strip()
+                        if content:
+                            return content
+            except Exception:
+                pass
+
+        # Grounded synthesis fallback
+        top_mem = memories[0]
+        content = top_mem.get("content", {})
+        entities = top_mem.get("entities", {})
+        summary = content.get("summary") or content.get("clean_text") or content.get("raw_text") or "Relevant memory found."
+
+        # Convert third-person prefix to second-person in fallback
+        if summary.lower().startswith("the user "):
+            summary = "You " + summary[9:]
+        elif summary.lower().startswith("user "):
+            summary = "You " + summary[5:]
+
+        people = entities.get("people", [])
+        places = entities.get("places", [])
+
+        extra_details = []
+        if people:
+            extra_details.append(f"with {', '.join(people) if isinstance(people, list) else str(people)}")
+        if places:
+            extra_details.append(f"at {', '.join(places) if isinstance(places, list) else str(places)}")
+
+        extra_str = f" ({' '.join(extra_details)})" if extra_details else ""
+        return f"{summary}{extra_str}"
 
 
 def _extract_capitalized_names(text: str) -> list[str]:

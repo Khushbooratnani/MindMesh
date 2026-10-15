@@ -35,11 +35,20 @@ class StorageReference:
 
 
 def _sanitize_filename(filename: str) -> str:
-    """Sanitize user-provided filename to prevent path traversal and unsafe characters."""
-    # Strip directory components
-    clean_name = os.path.basename(filename).strip()
-    # Remove null bytes, control characters, and replace path separators
-    clean_name = re.sub(r"[\x00-\x1f\\/]", "", clean_name)
+    """Sanitize user-provided filename to prevent path traversal and unsafe characters.
+
+    Correctly handles both POSIX (e.g. ../../test.jpg) and Windows (e.g. C:\\Users\\image.png)
+    paths across all operating systems.
+    """
+    # Normalize backslashes to forward slashes first to handle Windows paths on Linux
+    normalized = filename.replace("\\", "/").strip()
+    # Strip drive letter if present (e.g. C:)
+    if len(normalized) >= 2 and normalized[1] == ":" and normalized[0].isalpha():
+        normalized = normalized[2:]
+    # Get basename using posix split
+    clean_name = normalized.rsplit("/", 1)[-1].strip()
+    # Remove null bytes and control characters
+    clean_name = re.sub(r"[\x00-\x1f]", "", clean_name)
     # Remove leading dots to avoid hidden files or '..'
     clean_name = clean_name.lstrip(".")
     return clean_name or "unnamed_file"

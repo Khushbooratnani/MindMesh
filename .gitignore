@@ -54,3 +54,9 @@ media_uploads/
 output/
 *_evaluation_results.json
 *.jsonl
+
+# Frontend dependencies & builds
+node_modules/
+.expo/
+dist/
+web-build/

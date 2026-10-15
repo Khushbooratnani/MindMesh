@@ -12,6 +12,7 @@ from app.services.image_processor import ImageProcessor
 from app.services.llm_service import LLMService
 from app.services.memory_assembler import MemoryAssembler
 from app.services.text_processor import TextProcessor
+from app.services.transcript_normalizer import TranscriptNormalizer
 from app.services.validation_service import ValidationService
 
 
@@ -26,11 +27,13 @@ class IngestionService:
         memory_assembler: MemoryAssembler | None = None,
         validation_service: ValidationService | None = None,
     ):
+        self.llm_service = llm_service or LLMService(settings.memory_extraction_model)
         self.text_processor = text_processor or TextProcessor()
         self.image_processor = image_processor or ImageProcessor()
-        self.audio_processor = audio_processor or AudioProcessor()
+        self.audio_processor = audio_processor or AudioProcessor(
+            transcript_normalizer=TranscriptNormalizer(llm_service=self.llm_service)
+        )
         self.canonical_builder = canonical_builder or CanonicalInputBuilder()
-        self.llm_service = llm_service or LLMService(settings.memory_extraction_model)
         self.memory_assembler = memory_assembler or MemoryAssembler()
         self.validation_service = validation_service or ValidationService()
 
@@ -132,6 +135,7 @@ class IngestionService:
             file_bytes=file_bytes,
             filename=filename,
             content_type=content_type,
+            user_context=user_context,
         )
         canonical_input = self.canonical_builder.build(
             processed=processed,

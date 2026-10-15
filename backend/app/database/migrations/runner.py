@@ -26,15 +26,17 @@ async def init_db_schema(engine: AsyncEngine | None = None) -> None:
             await conn.run_sync(Base.metadata.create_all)
         return
 
-    # For PostgreSQL, execute SQL migration script
-    migration_file = Path(__file__).parent / "001_initial_schema.sql"
-    if migration_file.exists():
-        sql_content = migration_file.read_text(encoding="utf-8")
-        # Split statements by semicolon
-        statements = [stmt.strip() for stmt in sql_content.split(";") if stmt.strip()]
+    # For PostgreSQL, execute SQL migration scripts in sorted numerical order
+    migrations_dir = Path(__file__).parent
+    migration_files = sorted(migrations_dir.glob("*.sql"))
+    if migration_files:
         async with target_engine.begin() as conn:
-            for statement in statements:
-                await conn.execute(text(statement))
+            for migration_file in migration_files:
+                sql_content = migration_file.read_text(encoding="utf-8")
+                # Split statements by semicolon
+                statements = [stmt.strip() for stmt in sql_content.split(";") if stmt.strip()]
+                for statement in statements:
+                    await conn.execute(text(statement))
     else:
         async with target_engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)

@@ -1,5 +1,6 @@
 from app.database.models.base import Base, GUID, TimestampMixin
 from app.database.models.phase1_output import Phase1OutputModel
+from app.database.models.phase2_embedding import Phase2EmbeddingModel
 from app.database.models.raw_input import RawInputModel
 
 __all__ = [
@@ -8,4 +9,6 @@ __all__ = [
     "TimestampMixin",
     "RawInputModel",
     "Phase1OutputModel",
+    "Phase2EmbeddingModel",
 ]
+

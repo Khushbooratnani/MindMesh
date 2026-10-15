@@ -10,6 +10,7 @@ from sqlalchemy.types import JSON
 from app.database.models.base import Base, GUID
 
 if TYPE_CHECKING:
+    from app.database.models.phase2_embedding import Phase2EmbeddingModel
     from app.database.models.raw_input import RawInputModel
 
 
@@ -70,6 +71,16 @@ class Phase1OutputModel(Base):
     raw_input: Mapped["RawInputModel"] = relationship(
         "RawInputModel",
         back_populates="phase1_outputs",
+        lazy="selectin",
+    )
+
+    # Relationship to downstream Phase 2 vector embeddings
+    phase2_embedding: Mapped["Phase2EmbeddingModel | None"] = relationship(
+        "Phase2EmbeddingModel",
+        back_populates="phase1_output",
+        foreign_keys="[Phase2EmbeddingModel.phase1_output_id]",
+        uselist=False,
+        cascade="all, delete-orphan",
         lazy="selectin",
     )
 

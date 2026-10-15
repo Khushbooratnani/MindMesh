@@ -55,3 +55,14 @@ class UnauthorizedGroupAccessError(IngestionError):
 class SchemaValidationError(IngestionError):
     code = "SCHEMA_VALIDATION_FAILED"
     status_code = 500
+
+
+class Phase2Error(IngestionError):
+    code = "PHASE2_ERROR"
+    status_code = 500
+
+
+class MemorySearchError(Phase2Error):
+    code = "MEMORY_SEARCH_ERROR"
+    status_code = 500
+

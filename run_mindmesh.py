@@ -12,6 +12,7 @@ from pathlib import Path
 import socket
 import subprocess
 import sys
+import threading
 import time
 from typing import Any
 
@@ -117,10 +118,87 @@ def is_backend_healthy() -> bool:
         return False
 
 
+def stop_stale_backend_if_any() -> None:
+    """Terminate ONLY the process listening on TCP port 8001 to ensure a clean runtime lifecycle."""
+    if not is_port_open("127.0.0.1", 8001):
+        return
+
+    if sys.platform != "win32":
+        # 1. Use lsof to identify PID(s) listening on TCP port 8001 and terminate gracefully
+        try:
+            res = subprocess.run(["lsof", "-t", "-i:8001"], capture_output=True, text=True)
+            for pid in res.stdout.strip().split():
+                if pid.isdigit():
+                    subprocess.run(["kill", "-15", pid], capture_output=True)
+        except Exception:
+            pass
+        time.sleep(0.5)
+
+        # 2. If port 8001 is still occupied, escalate with SIGKILL to only those PID(s)
+        if is_port_open("127.0.0.1", 8001):
+            try:
+                res = subprocess.run(["lsof", "-t", "-i:8001"], capture_output=True, text=True)
+                for pid in res.stdout.strip().split():
+                    if pid.isdigit():
+                        subprocess.run(["kill", "-9", pid], capture_output=True)
+            except Exception:
+                pass
+            time.sleep(0.5)
+    else:
+        try:
+            res = subprocess.run(["netstat", "-ano"], capture_output=True, text=True)
+            for line in res.stdout.splitlines():
+                if ":8001" in line and "LISTENING" in line:
+                    pid = line.strip().split()[-1]
+                    if pid.isdigit() and pid != "0":
+                        subprocess.run(["taskkill", "/F", "/PID", pid], capture_output=True)
+        except Exception:
+            pass
+
+    for _ in range(10):
+        if not is_port_open("127.0.0.1", 8001):
+            break
+        time.sleep(0.2)
+
+
+def _log_tee_worker(proc: subprocess.Popen[str], log_path: Path) -> None:
+    """Continuously relay child stdout lines to persistent backend.log AND live terminal stdout."""
+    if proc.stdout is None:
+        return
+    try:
+        with open(log_path, "a", encoding="utf-8", buffering=1) as f:
+            for line in iter(proc.stdout.readline, ""):
+                if not line:
+                    break
+                # Always write to persistent log file on disk
+                try:
+                    f.write(line)
+                    f.flush()
+                except Exception:
+                    pass
+                # Stream live to parent terminal if available
+                try:
+                    sys.stdout.write(line)
+                    sys.stdout.flush()
+                except Exception:
+                    # Ignore broken pipe on terminal stdout if SSH disconnected
+                    pass
+    except Exception:
+        pass
+
+
 def start_backend_server(pg_running: bool) -> subprocess.Popen[str] | None:
-    """Start FastAPI via Uvicorn in background if not already running."""
-    if is_backend_healthy():
-        return None  # Already running, reuse it!
+    """Start FastAPI via Uvicorn with clean process recycling and persistent logging."""
+    # Cleanly recycle any stale backend process on port 8001
+    stop_stale_backend_if_any()
+
+    # Determine persistent log file location
+    home_dir = Path.home()
+    log_dir = home_dir / "mindmesh" / "Logs"
+    if not (home_dir / "mindmesh").exists():
+        log_dir = BACKEND_DIR / "Logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    backend_log = log_dir / "backend.log"
 
     cmd = [
         sys.executable,
@@ -128,13 +206,14 @@ def start_backend_server(pg_running: bool) -> subprocess.Popen[str] | None:
         "uvicorn",
         "app.main:app",
         "--host",
-        "127.0.0.1",
+        "0.0.0.0",
         "--port",
         "8001",
         "--log-level",
         "info",
     ]
     env = os.environ.copy()
+    env["PYTHONUNBUFFERED"] = "1"
     env["PYTHONPATH"] = str(BACKEND_DIR)
     if "DATABASE_URL" not in env:
         if pg_running:
@@ -142,22 +221,53 @@ def start_backend_server(pg_running: bool) -> subprocess.Popen[str] | None:
         else:
             env["DATABASE_URL"] = f"sqlite+aiosqlite:///{BACKEND_DIR / 'mindmesh_local.db'}"
 
-    proc = subprocess.Popen(
-        cmd,
-        cwd=str(BACKEND_DIR),
-        env=env,
-        stdout=None,  # Output logs directly to server terminal
-        stderr=None,
-        text=True,
+    popen_kwargs: dict[str, Any] = {
+        "cwd": str(BACKEND_DIR),
+        "env": env,
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.STDOUT,
+        "text": True,
+        "bufsize": 1,
+    }
+    if sys.platform != "win32":
+        popen_kwargs["start_new_session"] = True
+
+    proc = subprocess.Popen(cmd, **popen_kwargs)
+
+    # Start background daemon thread to stream logs live to terminal + persist to backend.log
+    tee_thread = threading.Thread(
+        target=_log_tee_worker,
+        args=(proc, backend_log),
+        daemon=True,
     )
+    tee_thread.start()
 
     # Poll until /health becomes ready (up to 15 seconds)
     for _ in range(30):
         time.sleep(0.5)
         if is_backend_healthy():
             return proc
+        if proc.poll() is not None:
+            break
 
-    raise RuntimeError("MindMesh backend did not become ready in 15 seconds.")
+    # Read recent logs if backend failed to start
+    recent_logs = ""
+    if backend_log.exists():
+        try:
+            with open(backend_log, "r", encoding="utf-8", errors="replace") as f:
+                lines = f.readlines()
+                recent_logs = "".join(lines[-20:])
+        except Exception:
+            pass
+
+    exit_code = proc.poll()
+    if exit_code is not None:
+        raise RuntimeError(
+            f"MindMesh backend process exited prematurely with code {exit_code}.\nRecent logs:\n{recent_logs}"
+        )
+    raise RuntimeError(
+        f"MindMesh backend did not become ready in 15 seconds.\nRecent logs:\n{recent_logs}"
+    )
 
 
 def send_memory_ingestion(

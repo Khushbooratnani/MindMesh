@@ -21,4 +21,7 @@ class CanonicalInputBuilder:
             source_context=system_context,
             media_reference=system_context.media_reference,
             user_context=system_context.user_context,
+            detected_language=processed.detected_language,
+            normalized_language=processed.normalized_language,
+            display_script=processed.display_script,
         )

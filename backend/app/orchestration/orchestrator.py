@@ -11,6 +11,7 @@ from app.database.repositories.raw_input_repo import RawInputRepository
 from app.schemas.ingestion_request import CurrentUser, TextIngestionRequest
 from app.schemas.memory_output import MediaReference, MemoryV1
 from app.services.ingestion_service import IngestionService
+from app.services.phase2_service import Phase2Service
 from app.storage.file_storage import FileStorage
 
 logger = logging.getLogger(__name__)
@@ -31,7 +32,7 @@ class MindMeshOrchestrator:
     
     Coordinates the multi-phase pipeline starting from raw input preservation,
     durable media file storage, delegating to Phase 1 ingestion, persisting
-    Phase 1 MemoryV1 JSONB, and managing failure recovery.
+    Phase 1 MemoryV1 JSONB, triggering Phase 2 dual-vector embeddings, and managing failure recovery.
     """
 
     def __init__(
@@ -40,11 +41,13 @@ class MindMeshOrchestrator:
         phase1_output_repo: Phase1OutputRepository,
         ingestion_service: IngestionService | None = None,
         file_storage: FileStorage | None = None,
+        phase2_service: Phase2Service | None = None,
     ) -> None:
         self.raw_input_repo = raw_input_repo
         self.phase1_output_repo = phase1_output_repo
         self.ingestion_service = ingestion_service or IngestionService()
         self.file_storage = file_storage or FileStorage()
+        self.phase2_service = phase2_service
         self._post_phase1_hooks: list[PostPhase1Hook] = []
         self.last_raw_input_id: uuid.UUID | None = None
         self.last_phase1_output_id: uuid.UUID | None = None
@@ -133,7 +136,15 @@ class MindMeshOrchestrator:
             logger.info("[Storage] Raw input marked completed")
             logger.info("[MindMesh] Processing completed successfully")
 
-            # 8. Trigger any registered future phase hooks (extensibility point)
+            # 8. Phase 2 Dual-Vector Embeddings
+            if self.phase2_service is not None:
+                try:
+                    await self.phase2_service.process_phase1_output_id(phase1_output.id)
+                    logger.info("[Phase 2] Dual-vector embeddings generated and stored for: %s", phase1_output.id)
+                except Exception as p2_exc:
+                    logger.warning("[Phase 2] Embedding generation failed for %s: %s", phase1_output.id, p2_exc)
+
+            # 9. Trigger any registered future phase hooks (extensibility point)
             for hook in self._post_phase1_hooks:
                 try:
                     await hook(memory, persisted_raw_input, phase1_output)
@@ -304,7 +315,15 @@ class MindMeshOrchestrator:
             logger.info("[Storage] Raw input marked completed")
             logger.info("[MindMesh] Processing completed successfully")
 
-            # 9. Trigger hooks
+            # 9. Phase 2 Dual-Vector Embeddings
+            if self.phase2_service is not None:
+                try:
+                    await self.phase2_service.process_phase1_output_id(phase1_output.id)
+                    logger.info("[Phase 2] Dual-vector embeddings generated and stored for: %s", phase1_output.id)
+                except Exception as p2_exc:
+                    logger.warning("[Phase 2] Embedding generation failed for %s: %s", phase1_output.id, p2_exc)
+
+            # 10. Trigger hooks
             for hook in self._post_phase1_hooks:
                 try:
                     await hook(memory, persisted_raw_input, phase1_output)
@@ -483,7 +502,15 @@ class MindMeshOrchestrator:
             logger.info("[Storage] Raw input marked completed")
             logger.info("[MindMesh] Processing completed successfully")
 
-            # 9. Trigger hooks
+            # 9. Phase 2 Dual-Vector Embeddings
+            if self.phase2_service is not None:
+                try:
+                    await self.phase2_service.process_phase1_output_id(phase1_output.id)
+                    logger.info("[Phase 2] Dual-vector embeddings generated and stored for: %s", phase1_output.id)
+                except Exception as p2_exc:
+                    logger.warning("[Phase 2] Embedding generation failed for %s: %s", phase1_output.id, p2_exc)
+
+            # 10. Trigger hooks
             for hook in self._post_phase1_hooks:
                 try:
                     await hook(memory, persisted_raw_input, phase1_output)

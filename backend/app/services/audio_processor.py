@@ -8,6 +8,7 @@ from app.core.enums import MediaType
 from app.core.errors import UnsupportedFileFormatError, TranscriptionFailedError
 from app.schemas.canonical_input import ProcessedInput
 from app.services.text_processor import normalize_whitespace
+from app.services.transcript_normalizer import TranscriptNormalizer
 from app.services.whisper_service import WhisperService
 
 logger = logging.getLogger(__name__)
@@ -67,8 +68,13 @@ def is_valid_audio_header(header_bytes: bytes) -> bool:
 class AudioProcessor:
     """Processes audio inputs, validates audio formats/containers, and transcribes via WhisperService."""
 
-    def __init__(self, whisper_service: WhisperService | None = None):
+    def __init__(
+        self,
+        whisper_service: WhisperService | None = None,
+        transcript_normalizer: TranscriptNormalizer | None = None,
+    ):
         self.whisper_service = whisper_service or WhisperService()
+        self.transcript_normalizer = transcript_normalizer or TranscriptNormalizer()
 
     def process(
         self,
@@ -76,15 +82,25 @@ class AudioProcessor:
         file_bytes: bytes | None = None,
         filename: str | None = None,
         content_type: str | None = None,
+        user_context: str | None = None,
     ) -> ProcessedInput:
         """Process an audio input from file_path or raw file_bytes."""
         if file_path is not None:
-            return self._process_path(file_path)
+            return self._process_path(file_path, user_context=user_context)
         if file_bytes is not None:
-            return self._process_bytes(file_bytes, filename=filename or "audio_upload", content_type=content_type)
+            return self._process_bytes(
+                file_bytes,
+                filename=filename or "audio_upload",
+                content_type=content_type,
+                user_context=user_context,
+            )
         raise TranscriptionFailedError("Neither file_path nor file_bytes was provided for audio processing.")
 
-    def _process_path(self, file_path: Path) -> ProcessedInput:
+    def _process_path(
+        self,
+        file_path: Path,
+        user_context: str | None = None,
+    ) -> ProcessedInput:
         if not file_path.exists():
             raise TranscriptionFailedError(f"Audio file not found: {file_path}")
 
@@ -113,11 +129,34 @@ class AudioProcessor:
         else:
             transcript_data = self.whisper_service.transcribe(file_path)
 
-        transcript_text = transcript_data.get("transcript", "")
+        raw_text = transcript_data.get("transcript", "")
+        detected_lang = transcript_data.get("language")
+        lang_prob = transcript_data.get("language_probability")
+
+        try:
+            norm_res = self.transcript_normalizer.normalize(
+                raw_transcript=raw_text,
+                detected_language=detected_lang,
+                language_probability=lang_prob,
+                user_context=user_context,
+            )
+            clean_text = normalize_whitespace(norm_res.normalized_text)
+            norm_lang = norm_res.normalized_language
+            disp_script = norm_res.display_script
+        except Exception as exc:
+            logger.warning("[AudioProcessor] Normalization failed (%s), using raw transcript.", exc)
+            clean_text = normalize_whitespace(raw_text)
+            norm_lang = detected_lang
+            disp_script = "latin"
+
         return ProcessedInput(
             media_type=MediaType.AUDIO,
-            raw_text=transcript_text,
-            clean_text=normalize_whitespace(transcript_text),
+            raw_text=raw_text,
+            clean_text=clean_text,
+            detected_language=detected_lang,
+            language_probability=lang_prob,
+            normalized_language=norm_lang,
+            display_script=disp_script,
         )
 
     def _process_bytes(
@@ -125,6 +164,7 @@ class AudioProcessor:
         file_bytes: bytes,
         filename: str,
         content_type: str | None = None,
+        user_context: str | None = None,
     ) -> ProcessedInput:
         if not file_bytes:
             raise TranscriptionFailedError("Audio file is empty.")
@@ -155,9 +195,32 @@ class AudioProcessor:
             if tmp_path.exists():
                 tmp_path.unlink(missing_ok=True)
 
-        transcript_text = transcript_data.get("transcript", "")
+        raw_text = transcript_data.get("transcript", "")
+        detected_lang = transcript_data.get("language")
+        lang_prob = transcript_data.get("language_probability")
+
+        try:
+            norm_res = self.transcript_normalizer.normalize(
+                raw_transcript=raw_text,
+                detected_language=detected_lang,
+                language_probability=lang_prob,
+                user_context=user_context,
+            )
+            clean_text = normalize_whitespace(norm_res.normalized_text)
+            norm_lang = norm_res.normalized_language
+            disp_script = norm_res.display_script
+        except Exception as exc:
+            logger.warning("[AudioProcessor] Normalization failed (%s), using raw transcript.", exc)
+            clean_text = normalize_whitespace(raw_text)
+            norm_lang = detected_lang
+            disp_script = "latin"
+
         return ProcessedInput(
             media_type=MediaType.AUDIO,
-            raw_text=transcript_text,
-            clean_text=normalize_whitespace(transcript_text),
+            raw_text=raw_text,
+            clean_text=clean_text,
+            detected_language=detected_lang,
+            language_probability=lang_prob,
+            normalized_language=norm_lang,
+            display_script=disp_script,
         )

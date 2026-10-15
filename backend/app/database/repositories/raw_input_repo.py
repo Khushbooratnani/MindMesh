@@ -72,3 +72,25 @@ class RawInputRepository(BaseRepository[RawInputModel]):
             status="failed",
             error_message=error_message,
         )
+
+    async def get_feed(
+        self,
+        limit: int = 200,
+        offset: int = 0,
+    ) -> list[RawInputModel]:
+        """Retrieve raw inputs ordered by received_at DESC for user feed."""
+        stmt = (
+            select(RawInputModel)
+            .order_by(RawInputModel.received_at.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def get_total_count(self) -> int:
+        """Count total raw inputs in database."""
+        from sqlalchemy import func
+
+        result = await self.session.execute(select(func.count(RawInputModel.id)))
+        return result.scalar() or 0

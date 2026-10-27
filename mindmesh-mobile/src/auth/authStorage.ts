@@ -9,15 +9,10 @@ export interface IAuthStorage {
   setSession(session: AuthSession): Promise<void>;
   clearSession(): Promise<void>;
   getUser(): Promise<AuthUser | null>;
-
-  getLockerToken(): Promise<string | null>;
-  setLockerToken(token: string): Promise<void>;
-  clearLockerToken(): Promise<void>;
 }
 
 class MemoryAuthStorage implements IAuthStorage {
   private activeSession: AuthSession | null = null;
-  private lockerToken: string | null = null;
 
   async getSession(): Promise<AuthSession | null> {
     if (!this.activeSession) {
@@ -38,24 +33,11 @@ class MemoryAuthStorage implements IAuthStorage {
 
   async clearSession(): Promise<void> {
     this.activeSession = null;
-    this.lockerToken = null; // Also clear locker on logout
   }
 
   async getUser(): Promise<AuthUser | null> {
     const session = await this.getSession();
     return session ? session.user : null;
-  }
-
-  async getLockerToken(): Promise<string | null> {
-    return this.lockerToken;
-  }
-
-  async setLockerToken(token: string): Promise<void> {
-    this.lockerToken = token;
-  }
-
-  async clearLockerToken(): Promise<void> {
-    this.lockerToken = null;
   }
 }
 

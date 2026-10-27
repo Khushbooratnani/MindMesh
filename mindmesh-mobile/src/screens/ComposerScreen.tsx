@@ -7,13 +7,13 @@ import {
   ScrollView,
   Image,
   StyleSheet,
+  SafeAreaView,
   Modal,
   ActivityIndicator,
   Alert,
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import {
@@ -28,18 +28,11 @@ import {
   ingestAudioMemory,
 } from '../services/apiClient';
 import { convertMemoryV1ToMemoryItem } from '../services/memoryAdapter';
-import { MemoryItem, MemoryV1, ScreenId, Group } from '../types';
-import { getGroups } from '../services/apiClient';
-import { useAuth } from '../auth/AuthContext';
-import { toBackendPrivacy } from '../services/privacyMapper';
-import { localFirstAdapter } from '../local_first/localFirstAdapter';
-import { localEncryptedStorage } from '../local_first/localEncryptedStorage';
-import { deviceKeyManager } from '../local_first/deviceKeyManager';
+import { MemoryItem, MemoryV1, ScreenId } from '../types';
 
 interface ComposerProps {
   onNavigate: (id: ScreenId) => void;
   onSaveMemory: (newMemory: MemoryItem) => void;
-  initialGroupId?: string;
 }
 
 interface MediaAttachment {
@@ -53,20 +46,11 @@ interface MediaAttachment {
 export const ComposerScreen: React.FC<ComposerProps> = ({
   onNavigate,
   onSaveMemory,
-  initialGroupId,
 }) => {
   const [inputText, setInputText] = useState('');
   const [attachments, setAttachments] = useState<MediaAttachment[]>([]);
   const [selectedTags, setSelectedTags] = useState<string[]>(['Goa2026', 'Thoughts']);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const [availableGroups, setAvailableGroups] = useState<Group[]>([]);
-  const [chosenGroupId, setChosenGroupId] = useState<string | null>(initialGroupId || null);
-
-  // Auth context for locker state
-  const { lockerExists, isLockerUnlocked, unlockLocker } = useAuth();
-  const [lockerPassword, setLockerPassword] = useState('');
-  const [lockerError, setLockerError] = useState<string | null>(null);
-  const [isUnlockingLocker, setIsUnlockingLocker] = useState(false);
 
   // Audio recorder hook via expo-audio
   const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
@@ -78,11 +62,10 @@ export const ComposerScreen: React.FC<ComposerProps> = ({
   const [isProcessing, setIsProcessing] = useState(false);
   const [processingStep, setProcessingStep] = useState(1);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const abortControllerRef = useRef<AbortController | null>(null);
 
   // Privacy destination modal state
   const [isPrivacyModalOpen, setIsPrivacyModalOpen] = useState(false);
-  const [selectedDestination, setSelectedDestination] = useState<'locker' | 'private' | 'group' | 'public'>('private');
+  const [selectedDestination, setSelectedDestination] = useState<'private' | 'group' | 'public'>('private');
 
   // -------------------------------------------------------------
   // REAL CAMERA & IMAGE GALLERY
@@ -225,59 +208,14 @@ export const ComposerScreen: React.FC<ComposerProps> = ({
   // -------------------------------------------------------------
   const handleStartSave = () => {
     if (!inputText.trim() && attachments.length === 0) return;
-    setErrorMessage(null);
     setIsPrivacyModalOpen(true);
-    // Background fetch groups without blocking modal
-    getGroups().then((gList) => {
-      setAvailableGroups(gList);
-      if (!chosenGroupId && gList.length > 0) {
-        setChosenGroupId(gList[0].id);
-      }
-    }).catch(() => {});
-  };
-
-  const handleCancelProcessing = () => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-    }
-    setIsProcessing(false);
-    setErrorMessage('Ingestion cancelled by user.');
   };
 
   const handleExecuteSave = async () => {
-    // If saving to Private Locker, verify unlock status
-    if (selectedDestination === 'locker') {
-      if (!lockerExists) {
-        Alert.alert('Locker Required', 'Please initialize your Private Locker from the Locker tab first.');
-        return;
-      }
-      if (!isLockerUnlocked) {
-        if (!lockerPassword.trim()) {
-          setLockerError('Enter your Locker password to authorize private storage.');
-          return;
-        }
-        setIsUnlockingLocker(true);
-        try {
-          await unlockLocker(lockerPassword.trim());
-          setLockerPassword('');
-          setLockerError(null);
-        } catch (e: any) {
-          setIsUnlockingLocker(false);
-          setLockerError(e.message || 'Incorrect locker password.');
-          return;
-        } finally {
-          setIsUnlockingLocker(false);
-        }
-      }
-    }
-
     setIsPrivacyModalOpen(false);
     setIsProcessing(true);
     setProcessingStep(1);
     setErrorMessage(null);
-
-    const controller = new AbortController();
-    abortControllerRef.current = controller;
 
     try {
       let memoryV1: MemoryV1;
@@ -285,81 +223,6 @@ export const ComposerScreen: React.FC<ComposerProps> = ({
 
       const photo = attachments.find((a) => a.type === 'photo');
       const audio = attachments.find((a) => a.type === 'audio');
-
-      if (selectedDestination === 'locker') {
-        // -------------------------------------------------------------
-        // PATH A: PRIVATE LOCKER — PHONE-ONLY ENCRYPTED PERSISTENCE
-        // Never call backend ingestion routes for private content!
-        // -------------------------------------------------------------
-        setProcessingStep(2);
-
-        // Verify/unlock local device key
-        if (!deviceKeyManager.isUnlocked()) {
-          if (lockerPassword && lockerPassword.length >= 8) {
-            await deviceKeyManager.unlockWithPassword(lockerPassword);
-          } else {
-            throw new Error('Please enter your locker password to authorize local encrypted storage.');
-          }
-        }
-
-        const localId = `loc_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
-        const localTitle =
-          inputText.trim().split('\n')[0].slice(0, 40) ||
-          (photo ? 'Private Photo' : audio ? 'Private Audio' : 'Private Note');
-
-        let savedLocalMediaUri: string | undefined;
-        if (photo) {
-          savedLocalMediaUri = await localEncryptedStorage.saveMediaFile(photo.uri, 'image');
-        } else if (audio) {
-          savedLocalMediaUri = await localEncryptedStorage.saveMediaFile(audio.uri, 'audio');
-        }
-
-        // Store encrypted on phone only (zero server persistence)
-        const savedLocal = await localFirstAdapter.savePrivateMemory({
-          id: localId,
-          text: inputText.trim() || (photo ? '[Private Photo]' : '[Private Audio]'),
-          title: localTitle,
-          mediaUri: savedLocalMediaUri,
-          mediaType: photo ? 'image' : audio ? 'audio' : 'text',
-        });
-
-        setProcessingStep(3);
-
-        const convertedItem: MemoryItem = {
-          id: savedLocal.id,
-          type: photo ? 'photo' : audio ? 'voice' : 'note',
-          title: savedLocal.title,
-          timestamp: 'Just now',
-          dateStr: 'Today',
-          timeOfDay: 'afternoon',
-          privacy: 'encrypted',
-          isEncrypted: true,
-          snippet: savedLocal.text.slice(0, 100),
-          fullContent: savedLocal.text,
-          mediaUrl: savedLocalMediaUri,
-          localMediaUri: savedLocalMediaUri,
-          tags: ['Private Locker', 'Encrypted', 'Local-Only'],
-          entities: [],
-          created_at: new Date().toISOString(),
-        };
-
-        // Hand off to session state (App.tsx will isolate it from Main Stream)
-        onSaveMemory(convertedItem);
-
-        setTimeout(() => {
-          setIsProcessing(false);
-          onNavigate('locker');
-        }, 500);
-        return;
-      }
-
-      // -------------------------------------------------------------
-      // PATH B: MAIN STREAM — SERVER PERSISTENCE
-      // Normal ingestion via FastAPI on port 8002
-      // -------------------------------------------------------------
-      const privacy = toBackendPrivacy(selectedDestination);
-
-      const targetGroupId = selectedDestination === 'group' ? (chosenGroupId || initialGroupId || null) : null;
 
       if (audio) {
         setProcessingStep(2);
@@ -369,8 +232,7 @@ export const ComposerScreen: React.FC<ComposerProps> = ({
           name: audio.name,
           type: audio.mimeType,
           context: inputText.trim() || undefined,
-          privacy,
-          group_id: targetGroupId,
+          privacy: selectedDestination === 'private' ? 'ONLY_ME' : 'GROUP',
         });
       } else if (photo) {
         setProcessingStep(2);
@@ -380,15 +242,13 @@ export const ComposerScreen: React.FC<ComposerProps> = ({
           name: photo.name,
           type: photo.mimeType,
           context: inputText.trim() || undefined,
-          privacy,
-          group_id: targetGroupId,
+          privacy: selectedDestination === 'private' ? 'ONLY_ME' : 'GROUP',
         });
       } else {
         setProcessingStep(2);
         memoryV1 = await ingestTextMemory({
           text: inputText.trim(),
-          privacy,
-          group_id: targetGroupId,
+          privacy: selectedDestination === 'private' ? 'ONLY_ME' : 'GROUP',
         });
       }
 
@@ -399,16 +259,16 @@ export const ComposerScreen: React.FC<ComposerProps> = ({
       // Save memory to frontend app session state
       onSaveMemory(convertedItem);
 
+      setIsProcessing(false);
+
       // Transition to Memory Detail
       setTimeout(() => {
         onNavigate('memory_detail');
       }, 400);
     } catch (err: any) {
       console.error('Ingestion error:', err);
-      setErrorMessage(err.message || 'Failed to ingest memory. Check backend connectivity.');
-    } finally {
       setIsProcessing(false);
-      abortControllerRef.current = null;
+      setErrorMessage(err.message || 'Failed to ingest memory. Check backend connectivity.');
     }
   };
 
@@ -420,26 +280,17 @@ export const ComposerScreen: React.FC<ComposerProps> = ({
         keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}
       >
         <View style={styles.container}>
-          {/* Header with Back and Close */}
+          {/* Header */}
           <View style={styles.topHeader}>
-            <TouchableOpacity
-              style={styles.backButton}
-              onPress={() => onNavigate('home')}
-              activeOpacity={0.8}
-            >
-              <Ionicons name="arrow-back" size={18} color="#4A6B53" />
-              <Text style={styles.backButtonText}>Feed</Text>
-            </TouchableOpacity>
-
-            <View style={styles.headerTitleGroup}>
+            <View>
               <View style={styles.titleRow}>
                 <Text style={styles.headerTitle}>Capture Memory</Text>
                 <View style={styles.livePill}>
                   <Text style={styles.livePillText}>Phase 1 Live</Text>
                 </View>
               </View>
-              <Text style={styles.headerSubtitle} numberOfLines={1}>
-                Notes, photos, or voice. Extracted with Qwen & stored.
+              <Text style={styles.headerSubtitle}>
+                Notes, photos, or voice. Extracted with Qwen & stored in PostgreSQL.
               </Text>
             </View>
 
@@ -690,63 +541,6 @@ export const ComposerScreen: React.FC<ComposerProps> = ({
               Choose where to index and encrypt this memory.
             </Text>
 
-            {/* Private Locker - Password Protected & Encrypted */}
-            <TouchableOpacity
-              style={[
-                styles.destOption,
-                selectedDestination === 'locker' && styles.destOptionActive,
-              ]}
-              onPress={() => setSelectedDestination('locker')}
-              activeOpacity={0.8}
-            >
-              <View style={[styles.destIconBox, { backgroundColor: '#E8F5E9' }]}>
-                <Ionicons name="lock-closed" size={18} color="#2D5A27" />
-              </View>
-              <View style={styles.destInfo}>
-                <Text style={styles.destTitle}>Private Locker (Secured)</Text>
-                <Text style={styles.destDesc}>
-                  AES-256-GCM encrypted. Hidden behind password & auto-lock.
-                </Text>
-              </View>
-              {selectedDestination === 'locker' && (
-                <Ionicons name="checkmark-circle" size={20} color="#2D5A27" />
-              )}
-            </TouchableOpacity>
-
-            {/* Inline Locker Unlock Prompt if locked */}
-            {selectedDestination === 'locker' && !isLockerUnlocked && (
-              <View style={styles.lockerUnlockBox}>
-                {!lockerExists ? (
-                  <Text style={styles.lockerUnlockHint}>
-                    Private Locker is not initialized. Please set it up in the Locker tab first.
-                  </Text>
-                ) : (
-                  <>
-                    <View style={styles.lockerUnlockHeader}>
-                      <Ionicons name="lock-closed" size={14} color="#D97706" />
-                      <Text style={styles.lockerUnlockHint}>
-                        Locker locked. Enter password to authorize private storage:
-                      </Text>
-                    </View>
-                    <TextInput
-                      style={styles.lockerInlineInput}
-                      placeholder="Locker Password"
-                      placeholderTextColor="#999"
-                      secureTextEntry
-                      value={lockerPassword}
-                      onChangeText={(t) => {
-                        setLockerPassword(t);
-                        setLockerError(null);
-                      }}
-                    />
-                    {lockerError ? (
-                      <Text style={styles.lockerInlineError}>{lockerError}</Text>
-                    ) : null}
-                  </>
-                )}
-              </View>
-            )}
-
             <TouchableOpacity
               style={[
                 styles.destOption,
@@ -759,9 +553,9 @@ export const ComposerScreen: React.FC<ComposerProps> = ({
                 <Ionicons name="shield-checkmark" size={18} color="#4A6B53" />
               </View>
               <View style={styles.destInfo}>
-                <Text style={styles.destTitle}>Personal Vault (Only Me)</Text>
+                <Text style={styles.destTitle}>Private Locker (Only Me)</Text>
                 <Text style={styles.destDesc}>
-                  Visible only to you in standard stream and search.
+                  Encrypted in your sovereign personal vault.
                 </Text>
               </View>
               {selectedDestination === 'private' && (
@@ -791,36 +585,6 @@ export const ComposerScreen: React.FC<ComposerProps> = ({
               )}
             </TouchableOpacity>
 
-            {selectedDestination === 'group' && availableGroups.length > 0 && (
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginVertical: 8, paddingLeft: 4 }}>
-                {availableGroups.map((g) => (
-                  <TouchableOpacity
-                    key={g.id}
-                    onPress={() => setChosenGroupId(g.id)}
-                    style={{
-                      paddingVertical: 6,
-                      paddingHorizontal: 12,
-                      borderRadius: 14,
-                      backgroundColor: chosenGroupId === g.id ? '#4A6B53' : '#FAF7F0',
-                      borderWidth: 1,
-                      borderColor: chosenGroupId === g.id ? '#4A6B53' : '#D5CDBC',
-                      marginRight: 8,
-                    }}
-                  >
-                    <Text
-                      style={{
-                        fontSize: 12,
-                        fontWeight: '700',
-                        color: chosenGroupId === g.id ? '#FFFFFF' : '#1F2923',
-                      }}
-                    >
-                      {g.name}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
-            )}
-
             <TouchableOpacity
               style={[
                 styles.destOption,
@@ -833,9 +597,9 @@ export const ComposerScreen: React.FC<ComposerProps> = ({
                 <Ionicons name="globe-outline" size={18} color="#4A6B53" />
               </View>
               <View style={styles.destInfo}>
-                <Text style={styles.destTitle}>General Stream</Text>
+                <Text style={styles.destTitle}>Public Feed</Text>
                 <Text style={styles.destDesc}>
-                  Personal memory stored in your default feed (Only Me).
+                  Visible in shared MindMesh feed for group recall.
                 </Text>
               </View>
               {selectedDestination === 'public' && (
@@ -918,15 +682,6 @@ export const ComposerScreen: React.FC<ComposerProps> = ({
                 </Text>
               </View>
             </View>
-
-            {/* Cancel Processing Action */}
-            <TouchableOpacity
-              style={styles.cancelProcessingBtn}
-              onPress={handleCancelProcessing}
-              activeOpacity={0.8}
-            >
-              <Text style={styles.cancelProcessingBtnText}>Cancel Ingestion</Text>
-            </TouchableOpacity>
           </View>
         </View>
       </Modal>
@@ -1418,74 +1173,5 @@ const styles = StyleSheet.create({
   stepTextActive: {
     color: '#233529',
     fontWeight: '700',
-  },
-  backButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingVertical: 6,
-    paddingHorizontal: 8,
-    borderRadius: 10,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#D5CDBC',
-  },
-  backButtonText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#4A6B53',
-  },
-  headerTitleGroup: {
-    flex: 1,
-    marginHorizontal: 10,
-  },
-  lockerUnlockBox: {
-    backgroundColor: '#FFFBEB',
-    borderRadius: 12,
-    padding: 12,
-    borderWidth: 1,
-    borderColor: '#FDE68A',
-    gap: 8,
-    marginTop: 2,
-  },
-  lockerUnlockHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  lockerUnlockHint: {
-    fontSize: 11,
-    color: '#92400E',
-    fontWeight: '600',
-    lineHeight: 15,
-  },
-  lockerInlineInput: {
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#FCD34D',
-    borderRadius: 8,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    fontSize: 13,
-    color: '#233529',
-  },
-  lockerInlineError: {
-    fontSize: 11,
-    color: '#DC2626',
-    fontWeight: '600',
-  },
-  cancelProcessingBtn: {
-    marginTop: 10,
-    paddingVertical: 10,
-    paddingHorizontal: 22,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: '#D5CDBC',
-    backgroundColor: '#FAF7F0',
-  },
-  cancelProcessingBtnText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#5E7A64',
   },
 });

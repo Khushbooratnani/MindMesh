@@ -16,8 +16,6 @@ class RawInputRepository(BaseRepository[RawInputModel]):
         raw_payload: str,
         structured_payload: dict[str, Any] | None = None,
         client_id: str = "U_DEVELOPMENT",
-        owner_id: str = "U_DEVELOPMENT",
-        privacy: str = "ONLY_ME",
         group_id: str | None = None,
         status: str = "received",
         input_id: uuid.UUID | None = None,
@@ -29,8 +27,6 @@ class RawInputRepository(BaseRepository[RawInputModel]):
             raw_payload=raw_payload,
             structured_payload=structured_payload,
             client_id=client_id,
-            owner_id=owner_id,
-            privacy=privacy,
             group_id=group_id,
             status=status,
         )
@@ -79,21 +75,12 @@ class RawInputRepository(BaseRepository[RawInputModel]):
 
     async def get_feed(
         self,
-        user_id: str = "U_DEVELOPMENT",
         limit: int = 200,
         offset: int = 0,
-        include_private: bool = False,
     ) -> list[RawInputModel]:
-        """Retrieve raw inputs ordered by received_at DESC for user feed (strictly excluding PRIVATE_LOCKER)."""
-        # P0 PRIVACY INVARIANT: Main Stream feed MUST NEVER include PRIVATE_LOCKER memories
-        condition = (
-            ((RawInputModel.owner_id == user_id) | (RawInputModel.privacy == "PUBLIC"))
-            & (RawInputModel.privacy != "PRIVATE_LOCKER")
-        )
-
+        """Retrieve raw inputs ordered by received_at DESC for user feed."""
         stmt = (
             select(RawInputModel)
-            .where(condition)
             .order_by(RawInputModel.received_at.desc())
             .offset(offset)
             .limit(limit)
@@ -101,36 +88,9 @@ class RawInputRepository(BaseRepository[RawInputModel]):
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
-    async def get_private_locker_memories(
-        self,
-        user_id: str,
-        limit: int = 200,
-        offset: int = 0,
-    ) -> list[RawInputModel]:
-        """Retrieve only private locker memories belonging to the authenticated locker owner."""
-        stmt = (
-            select(RawInputModel)
-            .where(RawInputModel.owner_id == user_id)
-            .where(RawInputModel.privacy == "PRIVATE_LOCKER")
-            .order_by(RawInputModel.received_at.desc())
-            .offset(offset)
-            .limit(limit)
-        )
-        result = await self.session.execute(stmt)
-        return list(result.scalars().all())
-
-    async def get_total_count(self, user_id: str = "U_DEVELOPMENT", include_private: bool = False) -> int:
-        """Count total raw inputs in database for user feed (strictly excluding PRIVATE_LOCKER)."""
+    async def get_total_count(self) -> int:
+        """Count total raw inputs in database."""
         from sqlalchemy import func
 
-        condition = (
-            ((RawInputModel.owner_id == user_id) | (RawInputModel.privacy == "PUBLIC"))
-            & (RawInputModel.privacy != "PRIVATE_LOCKER")
-        )
-
-        stmt = (
-            select(func.count(RawInputModel.id))
-            .where(condition)
-        )
-        result = await self.session.execute(stmt)
+        result = await self.session.execute(select(func.count(RawInputModel.id)))
         return result.scalar() or 0

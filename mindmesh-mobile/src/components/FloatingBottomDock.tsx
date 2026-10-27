@@ -36,42 +36,6 @@ export const FloatingBottomDock: React.FC<DockProps> = ({
           </Text>
         </TouchableOpacity>
 
-        {/* Groups Tab */}
-        <TouchableOpacity
-          onPress={() => onNavigate('groups')}
-          style={[
-            styles.tab,
-            activeScreenId === 'groups' || activeScreenId === 'group_detail'
-              ? styles.activeTab
-              : styles.secondaryTab,
-          ]}
-          activeOpacity={0.8}
-        >
-          <Ionicons
-            name={
-              activeScreenId === 'groups' || activeScreenId === 'group_detail'
-                ? 'people'
-                : 'people-outline'
-            }
-            size={18}
-            color={
-              activeScreenId === 'groups' || activeScreenId === 'group_detail'
-                ? '#FFFFFF'
-                : '#4A6B53'
-            }
-          />
-          <Text
-            style={[
-              styles.tabText,
-              activeScreenId === 'groups' || activeScreenId === 'group_detail'
-                ? styles.activeTabText
-                : styles.inactiveTabText,
-            ]}
-          >
-            Groups
-          </Text>
-        </TouchableOpacity>
-
         {/* Center + Capture Memory Tab */}
         <TouchableOpacity
           onPress={() => onNavigate('composer')}
@@ -103,27 +67,6 @@ export const FloatingBottomDock: React.FC<DockProps> = ({
             Vault
           </Text>
         </TouchableOpacity>
-
-        {/* Private Locker Tab */}
-        <TouchableOpacity
-          onPress={() => onNavigate('locker')}
-          style={[styles.tab, activeScreenId === 'locker' ? styles.activeTab : styles.secondaryTab]}
-          activeOpacity={0.8}
-        >
-          <Ionicons
-            name={activeScreenId === 'locker' ? 'shield' : 'shield-outline'}
-            size={18}
-            color={activeScreenId === 'locker' ? '#FFFFFF' : '#4A6B53'}
-          />
-          <Text
-            style={[
-              styles.tabText,
-              activeScreenId === 'locker' ? styles.activeTabText : styles.inactiveTabText,
-            ]}
-          >
-            Locker
-          </Text>
-        </TouchableOpacity>
       </View>
     </View>
   );
@@ -143,7 +86,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     borderRadius: 30,
     paddingVertical: 6,
-    paddingHorizontal: 8,
+    paddingHorizontal: 10,
     borderWidth: 1,
     borderColor: '#D5CDBC',
     shadowColor: '#000000',
@@ -151,15 +94,15 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.12,
     shadowRadius: 16,
     elevation: 8,
-    gap: 4,
+    gap: 8,
   },
   tab: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 7,
-    paddingHorizontal: 9,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
     borderRadius: 22,
-    gap: 4,
+    gap: 6,
   },
   secondaryTab: {
     backgroundColor: '#FAF7F0',
@@ -168,7 +111,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#4A6B53',
   },
   tabText: {
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: '700',
   },
   activeTabText: {

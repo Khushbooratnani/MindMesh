@@ -166,9 +166,7 @@ export function convertRawFeedItemToMemoryItem(item: RawFeedItem): MemoryItem {
 
   const st = item.structured_payload || {};
   const storageKey = item.storage_key || st.storage_key || st.relative_path;
-  const mediaUri = item.media_url
-    ? (item.media_url.startsWith('http') ? item.media_url : getApiUrl(item.media_url))
-    : (storageKey ? getApiUrl(`/api/v1/media/${storageKey}`) : undefined);
+  const mediaUri = item.media_url || (storageKey ? getApiUrl(`/api/v1/media/${storageKey}`) : undefined);
 
   let title = 'Raw Memory';
   let snippet = item.raw_payload;

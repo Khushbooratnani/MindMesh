@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, Text
+from sqlalchemy import DateTime, Index, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
@@ -45,19 +45,6 @@ class RawInputModel(Base):
         String(64),
         nullable=False,
         default="U_DEVELOPMENT",
-        index=True,
-    )
-    owner_id: Mapped[str] = mapped_column(
-        String(64),
-        ForeignKey("users.id", ondelete="CASCADE"),
-        nullable=False,
-        default="U_DEVELOPMENT",
-        index=True,
-    )
-    privacy: Mapped[str] = mapped_column(
-        String(32),
-        nullable=False,
-        default="ONLY_ME",
         index=True,
     )
     group_id: Mapped[str | None] = mapped_column(

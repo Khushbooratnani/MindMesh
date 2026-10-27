@@ -13,7 +13,6 @@ class MemorySearchRequest(BaseModel):
     content_weight: float = Field(default=0.5, ge=0.0, le=1.0, description="Weight for content vector similarity")
     context_weight: float = Field(default=0.5, ge=0.0, le=1.0, description="Weight for context vector similarity")
     generate_answer: bool = Field(default=True, description="Whether to generate grounded LLM answer")
-    group_id: Optional[Any] = Field(default=None, description="Optional group context to filter semantic search")
 
 
 class MemorySearchResult(BaseModel):

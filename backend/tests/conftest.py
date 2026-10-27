@@ -1,14 +1,11 @@
 import asyncio
 from collections.abc import AsyncGenerator
-from datetime import datetime, timezone
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 from app.database.connection.session import get_db_session
 from app.database.models.base import Base
-from app.database.models.user import UserModel
-from app.services.auth_service import AuthService
 from app.main import app
 
 # Shared async test engine using in-memory SQLite with static pool
@@ -30,17 +27,6 @@ def setup_test_database():
     async def _init_tables():
         async with _TEST_ENGINE.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
-        async with _TEST_SESSION_MAKER() as session:
-            user = await session.get(UserModel, "U_DEVELOPMENT")
-            if not user:
-                user = UserModel(
-                    id="U_DEVELOPMENT",
-                    username="dev_user",
-                    password_hash=AuthService.hash_password("DevPassword123!"),
-                    created_at=datetime.now(timezone.utc),
-                )
-                session.add(user)
-                await session.commit()
 
     asyncio.run(_init_tables())
     yield

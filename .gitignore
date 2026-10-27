@@ -1,11 +1,8 @@
 # macOS
 .DS_Store
 
-# Root documentation drafts (allowed)
-# /*.md
-*.zip
-backups/
-release_packages/
+# Root documentation drafts
+/*.md
 
 # Python
 __pycache__/

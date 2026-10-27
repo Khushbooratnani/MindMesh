@@ -20,12 +20,6 @@ export interface AuthState {
   isLoading: boolean;
   isAuthenticated: boolean;
   error: string | null;
-
-  // Locker states
-  lockerExists: boolean;
-  isLockerUnlocked: boolean;
-  lockerExpiresAt: string | null;
-  isLockerLoading: boolean;
 }
 
 export interface SignInCredentials {
@@ -48,11 +42,4 @@ export interface AuthContextType extends AuthState {
   signOut: () => Promise<void>;
   resetPassword: (email: string) => Promise<{ success: boolean; message: string }>;
   clearError: () => void;
-
-  // Locker functions
-  checkLocker: () => Promise<void>;
-  createLocker: (password: string) => Promise<{ recoveryKey: string } | void>;
-  unlockLocker: (password: string) => Promise<void>;
-  lockLocker: () => Promise<void>;
-  resetLockerTimer: () => void;
 }

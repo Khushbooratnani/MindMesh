@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { StyleSheet, View, Text, ActivityIndicator, SafeAreaView } from 'react-native';
+import { StyleSheet, View, Text, ActivityIndicator, Linking, Alert } from 'react-native';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { AuthProvider, useAuth } from './src/auth/AuthContext';
 import { MindMeshLogo } from './src/components/MindMeshLogo';
@@ -11,8 +12,11 @@ import { HomeScreen } from './src/screens/HomeScreen';
 import { ComposerScreen } from './src/screens/ComposerScreen';
 import { MemoryDetailScreen } from './src/screens/MemoryDetailScreen';
 import { VaultScreen } from './src/screens/VaultScreen';
-import { MemoryItem, ScreenId } from './src/types';
-import { getRawFeed } from './src/services/apiClient';
+import { LockerScreen } from './src/screens/LockerScreen';
+import { GroupsScreen } from './src/screens/GroupsScreen';
+import { GroupDetailScreen } from './src/screens/GroupDetailScreen';
+import { MemoryItem, ScreenId, Group } from './src/types';
+import { getRawFeed, acceptInvitation } from './src/services/apiClient';
 import { convertRawFeedItemToMemoryItem } from './src/services/memoryAdapter';
 
 function MainApp() {
@@ -22,6 +26,63 @@ function MainApp() {
   const [totalCount, setTotalCount] = useState<number>(0);
   const [isLoadingFeed, setIsLoadingFeed] = useState<boolean>(false);
   const [selectedMemory, setSelectedMemory] = useState<MemoryItem | null>(null);
+
+  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
+  const [selectedGroup, setSelectedGroup] = useState<Group | null>(null);
+
+  const handleNavigate = (screen: ScreenId, params?: any) => {
+    if (params?.groupId !== undefined) {
+      setSelectedGroupId(params.groupId);
+    }
+    setActiveScreen(screen);
+  };
+
+  // Deep linking listener for invitation links (e.g. mindmesh://invite/{token} or http://.../invite/{token})
+  useEffect(() => {
+    const handleDeepLink = async (event: { url: string }) => {
+      try {
+        const url = event.url;
+        if (!url) return;
+        const match = url.match(/invite\/([a-zA-Z0-9_\-]+)/);
+        if (match && match[1]) {
+          const token = match[1];
+          Alert.alert(
+            'Group Invitation',
+            'You have received an invitation to join a group!',
+            [
+              { text: 'Cancel', style: 'cancel' },
+              {
+                text: 'Accept & Join',
+                onPress: async () => {
+                  try {
+                    const member = await acceptInvitation(token);
+                    Alert.alert('Welcome!', 'You have joined the group successfully.');
+                    if (member?.group_id) {
+                      setSelectedGroupId(member.group_id);
+                      setActiveScreen('group_detail');
+                    } else {
+                      setActiveScreen('groups');
+                    }
+                  } catch (err: any) {
+                    Alert.alert('Invitation Error', err?.message || 'Invalid or expired invitation token.');
+                  }
+                },
+              },
+            ]
+          );
+        }
+      } catch (err) {
+        console.warn('Error processing deep link:', err);
+      }
+    };
+
+    Linking.getInitialURL().then((url) => {
+      if (url) handleDeepLink({ url });
+    });
+
+    const subscription = Linking.addEventListener('url', handleDeepLink);
+    return () => subscription.remove();
+  }, []);
 
   // Synchronize initial screen with authentication status
   useEffect(() => {
@@ -34,7 +95,12 @@ function MainApp() {
         );
       } else {
         setActiveScreen((prev) =>
-          prev === 'home' || prev === 'composer' || prev === 'memory_detail' || prev === 'vault'
+          prev === 'home' ||
+          prev === 'composer' ||
+          prev === 'memory_detail' ||
+          prev === 'vault' ||
+          prev === 'groups' ||
+          prev === 'group_detail'
             ? 'login'
             : prev
         );
@@ -48,7 +114,13 @@ function MainApp() {
     try {
       const feedData = await getRawFeed(150, 0);
       if (feedData && Array.isArray(feedData.items)) {
-        const converted = feedData.items.map((item) =>
+        // P0 PRIVACY ISOLATION: Main Stream feed must NEVER include Private Locker memories
+        const publicOnlyItems = feedData.items.filter(
+          (item: any) =>
+            item.privacy !== 'PRIVATE_LOCKER' &&
+            item.system?.privacy !== 'PRIVATE_LOCKER'
+        );
+        const converted = publicOnlyItems.map((item) =>
           convertRawFeedItemToMemoryItem(item)
         );
         setMemories(converted);
@@ -68,9 +140,16 @@ function MainApp() {
   }, [isAuthenticated, fetchFeed]);
 
   const handleSaveMemory = (newMemory: MemoryItem) => {
-    // Prepend newly ingested memory to stream and update count
-    setMemories((prev) => [newMemory, ...prev]);
-    setTotalCount((prev) => prev + 1);
+    // P0 PRIVACY ISOLATION: Never add private locker memories to Main Stream!
+    const isPrivate =
+      newMemory.privacy === 'encrypted' ||
+      newMemory.isEncrypted === true ||
+      newMemory.rawMemoryV1?.system?.privacy === 'PRIVATE_LOCKER';
+
+    if (!isPrivate) {
+      setMemories((prev) => [newMemory, ...prev]);
+      setTotalCount((prev) => prev + 1);
+    }
     setSelectedMemory(newMemory);
   };
 
@@ -104,7 +183,9 @@ function MainApp() {
           activeScreen === 'home' ||
           activeScreen === 'composer' ||
           activeScreen === 'memory_detail' ||
-          activeScreen === 'vault') && (
+          activeScreen === 'vault' ||
+          activeScreen === 'groups' ||
+          activeScreen === 'group_detail') && (
           <LoginScreen onNavigate={(screen) => setActiveScreen(screen)} />
         )}
 
@@ -134,29 +215,58 @@ function MainApp() {
           totalCount={totalCount}
           isLoadingFeed={isLoadingFeed}
           onRefreshFeed={fetchFeed}
-          onNavigate={(screen) => setActiveScreen(screen)}
+          onNavigate={handleNavigate}
           onSelectMemory={(mem) => setSelectedMemory(mem)}
         />
       )}
 
       {activeScreen === 'vault' && (
         <VaultScreen
-          onNavigate={(screen) => setActiveScreen(screen)}
+          onNavigate={handleNavigate}
           onSelectMemory={(mem) => setSelectedMemory(mem)}
         />
       )}
 
+
       {activeScreen === 'composer' && (
         <ComposerScreen
-          onNavigate={(screen) => setActiveScreen(screen)}
+          onNavigate={handleNavigate}
           onSaveMemory={handleSaveMemory}
+          initialGroupId={selectedGroupId || undefined}
         />
       )}
 
       {activeScreen === 'memory_detail' && (
         <MemoryDetailScreen
           memory={selectedMemory || memories[0]}
-          onNavigate={(screen) => setActiveScreen(screen)}
+          onNavigate={handleNavigate}
+        />
+      )}
+
+      {activeScreen === 'locker' && (
+        <LockerScreen
+          onNavigate={handleNavigate}
+        />
+      )}
+
+      {activeScreen === 'groups' && (
+        <GroupsScreen
+          onNavigate={handleNavigate}
+          onSelectGroup={(grp) => {
+            setSelectedGroup(grp);
+            setSelectedGroupId(grp.id);
+          }}
+        />
+      )}
+
+      {activeScreen === 'group_detail' && (
+        <GroupDetailScreen
+          groupId={selectedGroupId || (selectedGroup ? selectedGroup.id : '')}
+          onNavigate={handleNavigate}
+          onSelectMemory={(mem) => {
+            setSelectedMemory(mem);
+            setActiveScreen('memory_detail');
+          }}
         />
       )}
     </View>
@@ -165,9 +275,11 @@ function MainApp() {
 
 export default function App() {
   return (
-    <AuthProvider>
-      <MainApp />
-    </AuthProvider>
+    <SafeAreaProvider>
+      <AuthProvider>
+        <MainApp />
+      </AuthProvider>
+    </SafeAreaProvider>
   );
 }
 

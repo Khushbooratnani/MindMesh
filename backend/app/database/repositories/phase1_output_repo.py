@@ -16,6 +16,8 @@ class Phase1OutputRepository(BaseRepository[Phase1OutputModel]):
         memory_id: str,
         payload: dict[str, Any],
         schema_version: str = "1.0",
+        owner_id: str = "U_DEVELOPMENT",
+        privacy: str = "ONLY_ME",
         processing_status: str = "completed",
         extractor_model: str | None = None,
         output_id: uuid.UUID | None = None,
@@ -24,12 +26,21 @@ class Phase1OutputRepository(BaseRepository[Phase1OutputModel]):
         target_raw_id = (
             raw_input_id if isinstance(raw_input_id, uuid.UUID) else uuid.UUID(str(raw_input_id))
         )
+        if payload and isinstance(payload, dict):
+            sys_dict = payload.get("system") or {}
+            if owner_id == "U_DEVELOPMENT" and sys_dict.get("owner_id"):
+                owner_id = sys_dict.get("owner_id")
+            if privacy == "ONLY_ME" and sys_dict.get("privacy"):
+                privacy = sys_dict.get("privacy")
+
         record = Phase1OutputModel(
             id=output_id or uuid.uuid4(),
             raw_input_id=target_raw_id,
             memory_id=memory_id,
             schema_version=schema_version,
             payload=payload,
+            owner_id=owner_id,
+            privacy=privacy,
             processing_status=processing_status,
             extractor_model=extractor_model,
         )

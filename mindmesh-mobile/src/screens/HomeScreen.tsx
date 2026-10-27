@@ -7,11 +7,11 @@ import {
   ScrollView,
   Image,
   StyleSheet,
-  SafeAreaView,
   ActivityIndicator,
   RefreshControl,
   Modal,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { MindMeshLogo } from '../components/MindMeshLogo';
 import { FloatingBottomDock } from '../components/FloatingBottomDock';
@@ -53,6 +53,11 @@ export const HomeScreen: React.FC<HomeProps> = ({
 
   // Local feed filtering across title, content, snippet, transcript, tags, location, entities
   const filteredMemories = memories.filter((m) => {
+    // P0 PRIVACY ISOLATION: Main Stream feed must NEVER render Private Locker memories
+    if (m.privacy === 'encrypted' || m.isEncrypted || m.rawMemoryV1?.system?.privacy === 'PRIVATE_LOCKER') {
+      return false;
+    }
+
     if (activeFilter !== 'all' && m.type !== activeFilter) return false;
 
     if (searchQuery.trim()) {

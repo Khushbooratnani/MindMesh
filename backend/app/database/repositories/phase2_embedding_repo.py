@@ -11,6 +11,7 @@ from sqlalchemy.orm import selectinload
 from app.database.models.phase1_output import Phase1OutputModel
 from app.database.models.phase2_embedding import Phase2EmbeddingModel
 from app.database.repositories.base import BaseRepository
+from app.services.authz_service import AuthorizationService
 
 logger = logging.getLogger(__name__)
 
@@ -134,9 +135,12 @@ class Phase2EmbeddingRepository:
     async def search_by_vectors(
         self,
         query_vector: list[float],
+        user_id: str = "U_DEVELOPMENT",
         content_weight: float = 0.5,
         context_weight: float = 0.5,
         top_k: int = 10,
+        locker_session_valid: bool = False,
+        group_id: Optional[uuid.UUID] = None,
         session: Optional[AsyncSession] = None,
     ) -> list[dict[str, Any]]:
         """Rank memories by weighted cosine similarity across dual vector columns.
@@ -156,6 +160,18 @@ class Phase2EmbeddingRepository:
         else:
             c_weight = content_weight / total_weight
             ctx_weight = context_weight / total_weight
+
+        # Use Central ACL
+        allowed_memories_stmt = AuthorizationService.get_accessible_memory_ids_query(
+            user_id=user_id,
+            locker_session_valid=locker_session_valid,
+            group_id=group_id,
+        )
+        allowed_memories_res = await s.execute(allowed_memories_stmt)
+        allowed_memory_ids = [row[0] for row in allowed_memories_res.all()]
+
+        if not allowed_memory_ids:
+            return []
 
         dialect_name = s.bind.dialect.name if s.bind else ""
 
@@ -180,6 +196,8 @@ class Phase2EmbeddingRepository:
                     ) AS combined_similarity
                 FROM phase2_embeddings e
                 JOIN phase1_outputs p ON e.phase1_output_id = p.id
+                WHERE (p.memory_id = ANY(:allowed_ids))
+                  AND (p.privacy != 'PRIVATE_LOCKER' OR :locker_valid = true)
                 ORDER BY combined_similarity DESC
                 LIMIT :top_k
                 """
@@ -191,6 +209,8 @@ class Phase2EmbeddingRepository:
                     "c_w": c_weight,
                     "ctx_w": ctx_weight,
                     "top_k": top_k,
+                    "allowed_ids": list(allowed_memory_ids),
+                    "locker_valid": locker_session_valid,
                 },
             )
             rows = result.mappings().all()
@@ -220,6 +240,12 @@ class Phase2EmbeddingRepository:
 
         for record in embeddings:
             if not record.phase1_output or not record.content_vector or not record.context_vector:
+                continue
+
+            # Filter by authorization using our fetched list
+            if record.memory_id not in allowed_memory_ids:
+                continue
+            if record.phase1_output.privacy == "PRIVATE_LOCKER" and not locker_session_valid:
                 continue
 
             content_sim = _cosine_similarity(query_vector, record.content_vector)

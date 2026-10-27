@@ -1,11 +1,18 @@
 import json
 from typing import Any
+import uuid
 
-from fastapi import APIRouter, Depends, File, Form, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Response, UploadFile, Request, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, and_, or_, func, exists
 
-from app.core.enums import Privacy
+from app.config import settings
+from app.core.enums import Privacy, GroupRole
 from app.database.connection.session import get_db_session
+from app.database.models.raw_input import RawInputModel
+from app.database.models.user import UserModel
+from app.database.models.groups import MemoryGroupAccessModel, GroupFeedReferenceModel
+from app.database.models.phase1_output import Phase1OutputModel
 from app.database.repositories.phase1_output_repo import Phase1OutputRepository
 from app.database.repositories.phase2_embedding_repo import Phase2EmbeddingRepository
 from app.database.repositories.raw_input_repo import RawInputRepository
@@ -13,15 +20,16 @@ from app.orchestration.orchestrator import MindMeshOrchestrator
 from app.schemas.ingestion_request import CurrentUser, TextIngestionRequest
 from app.schemas.memory_output import MemoryV1
 from app.schemas.search_schemas import MemorySearchRequest, MemorySearchResponse
+from app.schemas.group import ShareMemoryRequest, RevokeMemoryShareRequest, MemorySharesResponse
+from app.services.crypto_service import locker_crypto
 from app.services.ingestion_service import IngestionService
 from app.services.memory_search_service import MemorySearchService
 from app.services.phase2_service import Phase2Service
+from app.services.share_service import ShareService
+from app.services.group_service import GroupService
+from app.api.dependencies.auth import get_current_user, get_active_locker_session
 
 router = APIRouter(prefix="/api/v1/memories", tags=["memories"])
-
-
-def get_current_user() -> CurrentUser:
-    return CurrentUser(id="U_DEVELOPMENT")
 
 
 def get_ingestion_service() -> IngestionService:
@@ -48,14 +56,77 @@ def get_orchestrator(
     )
 
 
+async def _handle_group_ingestion_pre(
+    group_id_str: str | None, privacy: Privacy, user_id: str, db: AsyncSession
+) -> uuid.UUID | None:
+    if not group_id_str:
+        return None
+    if privacy == Privacy.PRIVATE_LOCKER:
+        raise HTTPException(
+            status_code=400,
+            detail="Private locker memories cannot be associated with a group.",
+        )
+    try:
+        target_gid = uuid.UUID(str(group_id_str))
+    except (ValueError, TypeError):
+        return None
+
+    # Enforce active membership and upload permissions (OWNER, ADMIN, CONTRIBUTOR, MEMBER)
+    await GroupService.verify_membership(
+        session=db,
+        group_id=target_gid,
+        user_id=user_id,
+        required_roles=[
+            GroupRole.OWNER.value,
+            GroupRole.ADMIN.value,
+            GroupRole.CONTRIBUTOR.value,
+            GroupRole.MEMBER.value,
+        ],
+    )
+    return target_gid
+
+
+async def _handle_group_ingestion_post(
+    target_gid: uuid.UUID | None, memory_id: str, user_id: str, db: AsyncSession
+) -> None:
+    if not target_gid:
+        return
+    db.add(
+        MemoryGroupAccessModel(
+            memory_id=memory_id,
+            group_id=target_gid,
+            granted_by=user_id,
+        )
+    )
+    db.add(
+        GroupFeedReferenceModel(
+            memory_id=memory_id,
+            group_id=target_gid,
+            shared_by=user_id,
+        )
+    )
+    await db.commit()
+
+
 @router.post("/ingest", response_model=MemoryV1)
 async def ingest_memory(
     request: TextIngestionRequest,
     response: Response,
-    current_user: CurrentUser = Depends(get_current_user),
+    fastapi_req: Request,
+    current_user: UserModel = Depends(get_current_user),
     orchestrator: MindMeshOrchestrator = Depends(get_orchestrator),
+    db: AsyncSession = Depends(get_db_session),
 ) -> MemoryV1:
+    target_gid = await _handle_group_ingestion_pre(
+        request.group_id, request.privacy, current_user.id, db
+    )
+    if request.privacy == Privacy.PRIVATE_LOCKER:
+        await get_active_locker_session(fastapi_req, current_user, db)
+
     result = await orchestrator.process_text_ingestion_result(request, current_user)
+    await _handle_group_ingestion_post(target_gid, result.memory.memory_id, current_user.id, db)
+    await db.commit()
+
     response.headers["X-Raw-Input-Id"] = str(result.raw_input_id)
     response.headers["X-Phase1-Output-Id"] = str(result.phase1_output_id)
     return result.memory
@@ -70,9 +141,15 @@ async def ingest_image_memory(
     group_id: str | None = Form(None),
     privacy: Privacy = Form(Privacy.ONLY_ME),
     allowed_users: str = Form("[]"),
-    current_user: CurrentUser = Depends(get_current_user),
+    fastapi_req: Request = None,
+    current_user: UserModel = Depends(get_current_user),
     orchestrator: MindMeshOrchestrator = Depends(get_orchestrator),
+    db: AsyncSession = Depends(get_db_session),
 ) -> MemoryV1:
+    target_gid = await _handle_group_ingestion_pre(group_id, privacy, current_user.id, db)
+    if privacy == Privacy.PRIVATE_LOCKER:
+        await get_active_locker_session(fastapi_req, current_user, db)
+
     if media_type != "image":
         from app.core.errors import UnsupportedMediaTypeError
 
@@ -89,6 +166,9 @@ async def ingest_image_memory(
         allowed_users=_parse_allowed_users(allowed_users),
         current_user=current_user,
     )
+    await _handle_group_ingestion_post(target_gid, result.memory.memory_id, current_user.id, db)
+    await db.commit()
+
     response.headers["X-Raw-Input-Id"] = str(result.raw_input_id)
     response.headers["X-Phase1-Output-Id"] = str(result.phase1_output_id)
     return result.memory
@@ -103,9 +183,15 @@ async def ingest_audio_memory(
     group_id: str | None = Form(None),
     privacy: Privacy = Form(Privacy.ONLY_ME),
     allowed_users: str = Form("[]"),
-    current_user: CurrentUser = Depends(get_current_user),
+    fastapi_req: Request = None,
+    current_user: UserModel = Depends(get_current_user),
     orchestrator: MindMeshOrchestrator = Depends(get_orchestrator),
+    db: AsyncSession = Depends(get_db_session),
 ) -> MemoryV1:
+    target_gid = await _handle_group_ingestion_pre(group_id, privacy, current_user.id, db)
+    if privacy == Privacy.PRIVATE_LOCKER:
+        await get_active_locker_session(fastapi_req, current_user, db)
+
     if media_type != "audio":
         from app.core.errors import UnsupportedMediaTypeError
 
@@ -122,6 +208,9 @@ async def ingest_audio_memory(
         allowed_users=_parse_allowed_users(allowed_users),
         current_user=current_user,
     )
+    await _handle_group_ingestion_post(target_gid, result.memory.memory_id, current_user.id, db)
+    await db.commit()
+
     response.headers["X-Raw-Input-Id"] = str(result.raw_input_id)
     response.headers["X-Phase1-Output-Id"] = str(result.phase1_output_id)
     return result.memory
@@ -138,16 +227,27 @@ def _parse_allowed_users(value: str) -> list[str]:
 
 @router.get("/inventory")
 async def get_memories_inventory(
+    current_user: UserModel = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> list[dict[str, Any]]:
-    """Read-only diagnostic endpoint to inspect persisted raw_inputs and phase1_outputs."""
-    from sqlalchemy import select
+    """Read-only diagnostic endpoint to inspect persisted raw_inputs for the caller. Disabled in production."""
+    if settings.app_env.lower() in ("production", "prod"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Diagnostic inventory endpoint is disabled in production.",
+        )
+
     from sqlalchemy.orm import selectinload
-    from app.database.models.raw_input import RawInputModel
 
     stmt = (
         select(RawInputModel)
         .options(selectinload(RawInputModel.phase1_outputs))
+        .where(
+            and_(
+                RawInputModel.owner_id == current_user.id,
+                RawInputModel.privacy != "PRIVATE_LOCKER",
+            )
+        )
         .order_by(RawInputModel.received_at.asc())
     )
     result = await session.execute(stmt)
@@ -156,10 +256,12 @@ async def get_memories_inventory(
     inventory = []
     for r in raw_inputs:
         for p in r.phase1_outputs:
+            if p.privacy == "PRIVATE_LOCKER":
+                continue
             inventory.append({
                 "raw_input_id": str(r.id),
                 "media_type": r.media_type,
-                "raw_payload": r.raw_payload,
+                "raw_payload": locker_crypto.decrypt(r.raw_payload) if r.raw_payload else "",
                 "structured_payload": r.structured_payload,
                 "raw_status": r.status,
                 "phase1_output_id": str(p.id),
@@ -174,12 +276,84 @@ async def get_memories_inventory(
 async def get_raw_feed(
     limit: int = 150,
     offset: int = 0,
+    group_id: str | None = None,
+    fastapi_req: Request = None,
+    current_user: UserModel = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
     """Production stream feed powered by PostgreSQL raw_inputs joined with canonical phase1_outputs MemoryV1."""
     repo = RawInputRepository(session)
-    raw_inputs = await repo.get_feed(limit=limit, offset=offset)
-    total_count = await repo.get_total_count()
+
+    if group_id:
+        from sqlalchemy.orm import selectinload
+
+        # 1. Require valid group and authenticated active membership
+        try:
+            target_gid = uuid.UUID(str(group_id))
+        except (ValueError, TypeError):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Invalid group identifier format: '{group_id}'.",
+            )
+
+        # Enforce membership check: raises 404 if not found / 403 if not member
+        await GroupService.verify_membership(
+            session=session,
+            group_id=target_gid,
+            user_id=current_user.id,
+        )
+
+        # Shared memories subquery via MemoryGroupAccessModel
+        shared_raw_ids = select(Phase1OutputModel.raw_input_id).where(
+            and_(
+                Phase1OutputModel.privacy != "PRIVATE_LOCKER",
+                exists().where(
+                    and_(
+                        MemoryGroupAccessModel.memory_id == Phase1OutputModel.memory_id,
+                        MemoryGroupAccessModel.group_id == target_gid,
+                    )
+                ),
+            )
+        )
+
+        stmt = (
+            select(RawInputModel)
+            .options(selectinload(RawInputModel.phase1_outputs))
+            .where(
+                and_(
+                    RawInputModel.privacy != "PRIVATE_LOCKER",
+                    or_(
+                        RawInputModel.group_id == str(target_gid),
+                        RawInputModel.group_id == group_id,
+                        RawInputModel.id.in_(shared_raw_ids),
+                    ),
+                )
+            )
+            .order_by(RawInputModel.received_at.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+        result = await session.execute(stmt)
+        raw_inputs = result.scalars().all()
+
+        count_stmt = select(func.count(RawInputModel.id)).where(
+            and_(
+                RawInputModel.privacy != "PRIVATE_LOCKER",
+                or_(
+                    RawInputModel.group_id == str(target_gid),
+                    RawInputModel.group_id == group_id,
+                    RawInputModel.id.in_(shared_raw_ids),
+                ),
+            )
+        )
+        total_count = (await session.execute(count_stmt)).scalar() or 0
+    else:
+        # P0 PRIVACY ISOLATION: Main Stream feed must NEVER include Private Locker memories under any circumstances.
+        include_private = False
+        raw_inputs = await repo.get_feed(
+            user_id=current_user.id, limit=limit, offset=offset, include_private=False
+        )
+        total_count = await repo.get_total_count(user_id=current_user.id, include_private=False)
 
     items = []
     for r in raw_inputs:
@@ -187,15 +361,22 @@ async def get_raw_feed(
         p1 = r.phase1_outputs[0] if r.phase1_outputs else None
         st = r.structured_payload or {}
 
+        decrypted_raw = locker_crypto.decrypt(r.raw_payload) if r.raw_payload else ""
+
         if p1 and p1.payload:
             p1_payload = dict(p1.payload)
-            p1_system = p1_payload.get("system") or {}
-            p1_content = p1_payload.get("content") or {}
+            p1_system = dict(p1_payload.get("system") or {})
+            p1_content = dict(p1_payload.get("content") or {})
             p1_entities = p1_payload.get("entities") or {}
             p1_semantics = p1_payload.get("semantics") or {}
             p1_temporal = p1_payload.get("temporal") or {}
             p1_processing = p1_payload.get("processing") or {}
             media_obj = p1_payload.get("media")
+
+            # Decrypt content fields if encrypted
+            for k in ("clean_text", "raw_text", "summary", "description"):
+                if k in p1_content and p1_content[k]:
+                    p1_content[k] = locker_crypto.decrypt(str(p1_content[k]))
 
             storage_key = None
             if media_obj and isinstance(media_obj, dict):
@@ -212,11 +393,7 @@ async def get_raw_feed(
                 storage_key = st.get("storage_key")
                 orig_filename = st.get("original_filename") or st.get("filename")
 
-            media_url = (
-                f"http://10.9.11.238:8001/api/v1/media/{storage_key}"
-                if storage_key
-                else None
-            )
+            media_url = f"/api/v1/media/{storage_key}" if storage_key else None
             user_ctx = (
                 p1_payload.get("user_context")
                 or p1_content.get("user_context")
@@ -230,7 +407,7 @@ async def get_raw_feed(
                     p1_content.get("raw_text")
                     or p1_content.get("clean_text")
                     or p1_content.get("summary")
-                    or r.raw_payload
+                    or decrypted_raw
                 )
             elif media_type == "image":
                 display_text = (
@@ -238,17 +415,18 @@ async def get_raw_feed(
                     or p1_content.get("summary")
                     or p1_content.get("clean_text")
                     or user_ctx
-                    or r.raw_payload
+                    or decrypted_raw
                 )
             else:
                 display_text = (
                     p1_content.get("clean_text")
                     or p1_content.get("summary")
-                    or r.raw_payload
+                    or decrypted_raw
                 )
 
             if media_obj and isinstance(media_obj, dict):
                 p1_payload["media"] = media_obj
+            p1_payload["content"] = p1_content
 
             items.append({
                 "id": p1.memory_id or str(r.id),
@@ -267,6 +445,7 @@ async def get_raw_feed(
                 "storage_key": storage_key,
                 "media_url": media_url,
                 "group_id": p1_system.get("group_id") or r.group_id,
+                "privacy": r.privacy,
                 # Canonical MemoryV1 structure fields
                 "system": p1_system,
                 "content": p1_content,
@@ -281,11 +460,7 @@ async def get_raw_feed(
         else:
             # Safe fallback for raw inputs without phase1_output
             storage_key = st.get("storage_key")
-            media_url = (
-                f"http://10.9.11.238:8001/api/v1/media/{storage_key}"
-                if storage_key
-                else None
-            )
+            media_url = f"/api/v1/media/{storage_key}" if storage_key else None
             orig_filename = st.get("original_filename") or st.get("filename")
             user_ctx = st.get("user_context")
 
@@ -295,7 +470,7 @@ async def get_raw_feed(
                 "raw_input_id": str(r.id),
                 "phase1_output_id": None,
                 "media_type": r.media_type,
-                "raw_payload": r.raw_payload,
+                "raw_payload": decrypted_raw,
                 "structured_payload": st,
                 "received_at": r.received_at.isoformat() if r.received_at else None,
                 "created_at": r.received_at.isoformat() if r.received_at else None,
@@ -305,19 +480,20 @@ async def get_raw_feed(
                 "storage_key": storage_key,
                 "media_url": media_url,
                 "group_id": r.group_id,
+                "privacy": r.privacy,
                 "system": {
-                    "owner_id": r.client_id,
+                    "owner_id": r.owner_id or r.client_id,
                     "group_id": r.group_id,
                     "media_type": r.media_type,
                     "created_at": r.received_at.isoformat() if r.received_at else "",
-                    "privacy": "ONLY_ME",
+                    "privacy": r.privacy or "ONLY_ME",
                     "allowed_users": [],
                 },
                 "content": {
-                    "raw_text": r.raw_payload,
-                    "clean_text": r.raw_payload,
+                    "raw_text": decrypted_raw,
+                    "clean_text": decrypted_raw,
                     "description": "",
-                    "summary": r.raw_payload[:100] if r.raw_payload else "",
+                    "summary": decrypted_raw[:100] if decrypted_raw else "",
                     "user_context": user_ctx,
                 },
                 "entities": {
@@ -369,19 +545,88 @@ def get_search_service(
 @router.post("/search", response_model=MemorySearchResponse)
 async def search_memories(
     request: MemorySearchRequest,
+    fastapi_req: Request,
     session: AsyncSession = Depends(get_db_session),
-    current_user: CurrentUser = Depends(get_current_user),
+    current_user: UserModel = Depends(get_current_user),
     search_service: MemorySearchService = Depends(get_search_service),
 ) -> MemorySearchResponse:
     """Semantic dual-vector memory search with grounded LLM answer synthesis."""
-    return await search_service.search(
-        session=session,
-        query=request.query,
-        top_k=request.top_k,
+    # P0 PRIVACY ISOLATION: Normal semantic search must NEVER return Private Locker records.
+    locker_session_valid = False
+
+    search_kwargs = {
+        "session": session,
+        "query": request.query,
+        "top_k": request.top_k,
+        "user_id": current_user.id,
+        "content_weight": request.content_weight,
+        "context_weight": request.context_weight,
+    }
+    import inspect
+    sig = inspect.signature(search_service.search)
+    if "group_id" in sig.parameters:
+        search_kwargs["group_id"] = request.group_id
+    if "locker_session_valid" in sig.parameters:
+        search_kwargs["locker_session_valid"] = locker_session_valid
+
+    return await search_service.search(**search_kwargs)
+
+
+@router.post("/{memory_id}/share")
+async def share_memory(
+    memory_id: str,
+    request: ShareMemoryRequest,
+    current_user: UserModel = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """Share personal memory to groups or users."""
+    await ShareService.share_memory(
+        session=db,
+        memory_id=memory_id,
         user_id=current_user.id,
-        content_weight=request.content_weight,
-        context_weight=request.context_weight,
+        group_ids=request.group_ids,
+        user_ids=request.user_ids,
+        can_edit=request.can_edit,
+        can_reshare=request.can_reshare,
     )
+    return {
+        "message": "Memory shared successfully.",
+        "memory_id": memory_id,
+        "shared_groups": [str(g) for g in request.group_ids],
+        "shared_users": request.user_ids,
+    }
 
 
+@router.post("/{memory_id}/revoke")
+async def revoke_memory_share(
+    memory_id: str,
+    request: RevokeMemoryShareRequest,
+    current_user: UserModel = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """Revoke sharing permissions for a memory."""
+    await ShareService.revoke_access(
+        session=db,
+        memory_id=memory_id,
+        user_id=current_user.id,
+        group_ids=request.group_ids,
+        user_ids=request.user_ids,
+    )
+    return {
+        "message": "Memory access revoked successfully.",
+        "memory_id": memory_id,
+    }
 
+
+@router.get("/{memory_id}/shares", response_model=MemorySharesResponse)
+async def get_memory_shares(
+    memory_id: str,
+    current_user: UserModel = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """View current sharing permissions for a memory."""
+    return await ShareService.get_memory_shares(
+        session=db,
+        memory_id=memory_id,
+        user_id=current_user.id,
+    )

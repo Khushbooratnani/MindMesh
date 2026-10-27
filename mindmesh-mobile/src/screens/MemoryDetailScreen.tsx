@@ -6,11 +6,25 @@ import {
   ScrollView,
   Image,
   StyleSheet,
-  SafeAreaView,
+  TextInput,
+  Modal,
+  ActivityIndicator,
+  Alert,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { createAudioPlayer, AudioPlayer } from 'expo-audio';
-import { MemoryItem, ScreenId } from '../types';
+import { MemoryItem, ScreenId, CommentItem, Group, MemorySharesResponse } from '../types';
+import {
+  getComments,
+  addComment,
+  deleteComment,
+  getGroups,
+  shareMemory,
+  revokeMemoryShare,
+  getMemoryShares,
+} from '../services/apiClient';
+import { useAuth } from '../auth/AuthContext';
 
 interface MemoryDetailProps {
   memory: MemoryItem | null;
@@ -23,6 +37,90 @@ export const MemoryDetailScreen: React.FC<MemoryDetailProps> = ({
 }) => {
   const [player, setPlayer] = useState<AudioPlayer | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
+
+  const { user } = useAuth();
+  const [comments, setComments] = useState<CommentItem[]>([]);
+  const [loadingComments, setLoadingComments] = useState(false);
+  const [commentText, setCommentText] = useState('');
+  const [submittingComment, setSubmittingComment] = useState(false);
+  const [shareModalVisible, setShareModalVisible] = useState(false);
+  const [groups, setGroups] = useState<Group[]>([]);
+  const [shares, setShares] = useState<MemorySharesResponse | null>(null);
+
+  const memoryId = memory?.rawMemoryV1?.memory_id || memory?.id;
+  const isPrivateLocker =
+    memory?.privacy === 'encrypted' ||
+    memory?.rawMemoryV1?.system?.privacy === 'PRIVATE_LOCKER';
+
+  const loadCommentsAndShares = async () => {
+    if (!memoryId) return;
+    try {
+      setLoadingComments(true);
+      const [commentList, shareData, groupList] = await Promise.all([
+        getComments(memoryId).catch(() => []),
+        getMemoryShares(memoryId).catch(() => null),
+        getGroups().catch(() => []),
+      ]);
+      setComments(commentList);
+      setShares(shareData);
+      setGroups(groupList);
+    } catch {
+      // ignore
+    } finally {
+      setLoadingComments(false);
+    }
+  };
+
+  useEffect(() => {
+    if (memoryId && !isPrivateLocker) {
+      loadCommentsAndShares();
+    }
+  }, [memoryId, isPrivateLocker]);
+
+  const handleAddComment = async () => {
+    if (!commentText.trim() || !memoryId) return;
+    setSubmittingComment(true);
+    try {
+      const newComment = await addComment(memoryId, commentText.trim());
+      setComments((prev) => [...prev, newComment]);
+      setCommentText('');
+    } catch (err: any) {
+      Alert.alert('Error', err?.message || 'Failed to add comment');
+    } finally {
+      setSubmittingComment(false);
+    }
+  };
+
+  const handleDeleteComment = async (commentId: string) => {
+    try {
+      await deleteComment(commentId);
+      setComments((prev) => prev.filter((c) => c.id !== commentId));
+    } catch (err: any) {
+      Alert.alert('Error', err?.message || 'Failed to delete comment');
+    }
+  };
+
+  const handleShareToGroup = async (groupId: string) => {
+    if (!memoryId) return;
+    try {
+      await shareMemory(memoryId, [groupId]);
+      Alert.alert('Success', 'Memory shared to group');
+      loadCommentsAndShares();
+    } catch (err: any) {
+      Alert.alert('Error', err?.message || 'Failed to share memory');
+    }
+  };
+
+  const handleRevokeShare = async (groupId: string) => {
+    if (!memoryId) return;
+    try {
+      await revokeMemoryShare(memoryId, groupId);
+      Alert.alert('Success', 'Sharing revoked');
+      loadCommentsAndShares();
+    } catch (err: any) {
+      Alert.alert('Error', err?.message || 'Failed to revoke sharing');
+    }
+  };
 
   useEffect(() => {
     return () => {
@@ -325,6 +423,99 @@ export const MemoryDetailScreen: React.FC<MemoryDetailProps> = ({
             </View>
           )}
 
+          {/* Collaborative Sharing & Permissions */}
+          {!isPrivateLocker ? (
+            <View style={styles.shareSection}>
+              <View style={styles.shareHeaderRow}>
+                <Text style={styles.sectionHeading}>Collaborative Sharing</Text>
+                <TouchableOpacity
+                  style={styles.openShareBtn}
+                  onPress={() => setShareModalVisible(true)}
+                >
+                  <Ionicons name="share-social-outline" size={15} color="#4A6B53" />
+                  <Text style={styles.openShareBtnText}>Share to Group</Text>
+                </TouchableOpacity>
+              </View>
+
+              {shares && shares.group_shares.length > 0 && (
+                <View style={styles.sharedGroupsRow}>
+                  <Text style={styles.sharedLabel}>Shared with {shares.group_shares.length} group(s):</Text>
+                  {shares.group_shares.map((gs) => {
+                    const grp = groups.find((g) => g.id === gs.group_id);
+                    return (
+                      <View key={gs.id} style={styles.groupShareChip}>
+                        <Text style={styles.groupShareChipText}>{grp?.name || 'Group'}</Text>
+                        <TouchableOpacity onPress={() => handleRevokeShare(gs.group_id)}>
+                          <Ionicons name="close-circle" size={16} color="#D9534F" />
+                        </TouchableOpacity>
+                      </View>
+                    );
+                  })}
+                </View>
+              )}
+            </View>
+          ) : (
+            <View style={styles.lockerIsolationNotice}>
+              <Ionicons name="lock-closed" size={16} color="#B25E09" />
+              <Text style={styles.lockerIsolationText}>
+                Private Locker memory: Hard isolation active. Sharing and comments are disabled.
+              </Text>
+            </View>
+          )}
+
+          {/* Collaborative Discussion & Knowledge Comments */}
+          {!isPrivateLocker && (
+            <View style={styles.commentsSection}>
+              <Text style={styles.sectionHeading}>
+                Collaborative Discussion ({comments.length})
+              </Text>
+
+              {/* Add comment row */}
+              <View style={styles.commentInputRow}>
+                <TextInput
+                  style={styles.commentInput}
+                  placeholder="Add insight, note, or fact..."
+                  placeholderTextColor="#8B9E90"
+                  value={commentText}
+                  onChangeText={setCommentText}
+                />
+                <TouchableOpacity
+                  style={styles.commentSubmitBtn}
+                  onPress={handleAddComment}
+                  disabled={submittingComment || !commentText.trim()}
+                >
+                  {submittingComment ? (
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                  ) : (
+                    <Ionicons name="send" size={16} color="#FFFFFF" />
+                  )}
+                </TouchableOpacity>
+              </View>
+
+              {/* Comments list */}
+              {comments.map((c) => (
+                <View key={c.id} style={styles.commentItem}>
+                  <View style={styles.commentTopRow}>
+                    <Text style={styles.commentAuthor}>{c.author_username}</Text>
+                    <View style={styles.commentMetaRight}>
+                      {c.is_knowledge_eligible && (
+                        <View style={styles.knowledgeEligibleBadge}>
+                          <Text style={styles.knowledgeEligibleText}>KNOWLEDGE</Text>
+                        </View>
+                      )}
+                      {user && c.author_id === user.id && (
+                        <TouchableOpacity onPress={() => handleDeleteComment(c.id)}>
+                          <Ionicons name="trash-outline" size={14} color="#D9534F" />
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                  </View>
+                  <Text style={styles.commentContent}>{c.content}</Text>
+                </View>
+              ))}
+            </View>
+          )}
+
           {/* Return Button */}
           <TouchableOpacity
             style={styles.returnButton}
@@ -335,6 +526,60 @@ export const MemoryDetailScreen: React.FC<MemoryDetailProps> = ({
           </TouchableOpacity>
         </ScrollView>
       </View>
+
+      {/* Share to Group Modal */}
+      <Modal visible={shareModalVisible} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Share Memory to Group</Text>
+              <TouchableOpacity onPress={() => setShareModalVisible(false)}>
+                <Ionicons name="close" size={22} color="#1F2923" />
+              </TouchableOpacity>
+            </View>
+
+            {groups.length === 0 ? (
+              <Text style={styles.emptyGroupsText}>
+                No groups found. Create a group first from the Groups tab.
+              </Text>
+            ) : (
+              groups.map((g) => {
+                const isAlreadyShared = shares?.group_shares.some((gs) => gs.group_id === g.id);
+                return (
+                  <View key={g.id} style={styles.groupOptionRow}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.groupOptionName}>{g.name}</Text>
+                      <Text style={styles.groupOptionRole}>Role: {g.my_role}</Text>
+                    </View>
+                    {isAlreadyShared ? (
+                      <TouchableOpacity
+                        style={styles.revokeShareBtn}
+                        onPress={() => handleRevokeShare(g.id)}
+                      >
+                        <Text style={styles.revokeShareBtnText}>Revoke</Text>
+                      </TouchableOpacity>
+                    ) : (
+                      <TouchableOpacity
+                        style={styles.grantShareBtn}
+                        onPress={() => handleShareToGroup(g.id)}
+                      >
+                        <Text style={styles.grantShareBtnText}>Share</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                );
+              })
+            )}
+
+            <TouchableOpacity
+              style={styles.doneBtn}
+              onPress={() => setShareModalVisible(false)}
+            >
+              <Text style={styles.doneBtnText}>Done</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -765,5 +1010,234 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 13,
     fontWeight: '700',
+  },
+  shareSection: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#E5DFD5',
+    marginBottom: 14,
+  },
+  shareHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  sectionHeading: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#1F2923',
+  },
+  openShareBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FAF7F0',
+    borderWidth: 1,
+    borderColor: '#D5CDBC',
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    gap: 4,
+  },
+  openShareBtnText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#4A6B53',
+  },
+  sharedGroupsRow: {
+    marginTop: 10,
+    gap: 6,
+  },
+  sharedLabel: {
+    fontSize: 11,
+    color: '#5E7A64',
+    fontWeight: '600',
+  },
+  groupShareChip: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: '#FAF7F0',
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E2DDD2',
+  },
+  groupShareChipText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#1F2923',
+  },
+  lockerIsolationNotice: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FEF3C7',
+    padding: 12,
+    borderRadius: 12,
+    marginBottom: 14,
+    gap: 8,
+  },
+  lockerIsolationText: {
+    flex: 1,
+    fontSize: 11,
+    color: '#92400E',
+    fontWeight: '600',
+  },
+  commentsSection: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#E5DFD5',
+    marginBottom: 14,
+  },
+  commentInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 10,
+    marginBottom: 12,
+    gap: 8,
+  },
+  commentInput: {
+    flex: 1,
+    backgroundColor: '#FAF7F0',
+    borderWidth: 1,
+    borderColor: '#D5CDBC',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    fontSize: 13,
+    color: '#1F2923',
+  },
+  commentSubmitBtn: {
+    backgroundColor: '#4A6B53',
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  commentItem: {
+    backgroundColor: '#FAF7F0',
+    borderRadius: 10,
+    padding: 10,
+    marginBottom: 8,
+  },
+  commentTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  commentAuthor: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#1F2923',
+  },
+  commentMetaRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  knowledgeEligibleBadge: {
+    backgroundColor: '#EAF2EC',
+    paddingVertical: 2,
+    paddingHorizontal: 6,
+    borderRadius: 4,
+  },
+  knowledgeEligibleText: {
+    fontSize: 8,
+    fontWeight: '800',
+    color: '#2D4A36',
+    letterSpacing: 0.5,
+  },
+  commentContent: {
+    fontSize: 13,
+    color: '#2D4A36',
+    lineHeight: 18,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.45)',
+    justifyContent: 'flex-end',
+  },
+  modalContent: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: 20,
+    paddingBottom: 40,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  modalTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#1F2923',
+  },
+  emptyGroupsText: {
+    fontSize: 13,
+    color: '#5E7A64',
+    textAlign: 'center',
+    marginVertical: 20,
+  },
+  groupOptionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F0ECE4',
+  },
+  groupOptionName: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#1F2923',
+  },
+  groupOptionRole: {
+    fontSize: 11,
+    color: '#8B9E90',
+  },
+  grantShareBtn: {
+    backgroundColor: '#4A6B53',
+    paddingVertical: 6,
+    paddingHorizontal: 14,
+    borderRadius: 14,
+  },
+  grantShareBtnText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  revokeShareBtn: {
+    borderWidth: 1,
+    borderColor: '#D9534F',
+    paddingVertical: 5,
+    paddingHorizontal: 12,
+    borderRadius: 14,
+  },
+  revokeShareBtnText: {
+    color: '#D9534F',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  doneBtn: {
+    marginTop: 16,
+    backgroundColor: '#FAF7F0',
+    borderWidth: 1,
+    borderColor: '#D5CDBC',
+    paddingVertical: 12,
+    borderRadius: 16,
+    alignItems: 'center',
+  },
+  doneBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#4A6B53',
   },
 });

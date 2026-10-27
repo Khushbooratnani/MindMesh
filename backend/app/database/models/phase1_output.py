@@ -45,6 +45,19 @@ class Phase1OutputModel(Base):
         nullable=False,
         default="1.0",
     )
+    owner_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        default="U_DEVELOPMENT",
+        index=True,
+    )
+    privacy: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default="ONLY_ME",
+        index=True,
+    )
     payload: Mapped[dict[str, Any]] = mapped_column(
         JSON().with_variant(JSONB, "postgresql"),
         nullable=False,

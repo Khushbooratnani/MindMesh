@@ -13,6 +13,7 @@ from app.schemas.memory_output import MediaReference, MemoryV1
 from app.services.ingestion_service import IngestionService
 from app.services.phase2_service import Phase2Service
 from app.storage.file_storage import FileStorage
+from app.services.crypto_service import locker_crypto
 
 logger = logging.getLogger(__name__)
 
@@ -72,11 +73,17 @@ class MindMeshOrchestrator:
         structured_payload = request.model_dump(mode="json")
 
         # 2. Persist raw input to PostgreSQL before any processing
+        privacy_val = request.privacy.value if hasattr(request.privacy, "value") else str(request.privacy)
+        is_private_locker = (privacy_val == Privacy.PRIVATE_LOCKER.value)
+        payload_to_store = locker_crypto.encrypt(verbatim_text) if is_private_locker else verbatim_text
+
         raw_input = await self.raw_input_repo.create(
             media_type=MediaType.TEXT.value,
-            raw_payload=verbatim_text,
+            raw_payload=payload_to_store,
             structured_payload=structured_payload,
             client_id=current_user.id,
+            owner_id=current_user.id,
+            privacy=privacy_val,
             group_id=request.group_id,
             status="received",
             input_id=input_id,
@@ -103,8 +110,11 @@ class MindMeshOrchestrator:
             else:
                 privacy_enum = privacy_val
 
+            # Decrypt in-memory for Phase 1 and Phase 2 processing
+            decrypted_text = locker_crypto.decrypt(persisted_raw_input.raw_payload)
+
             phase1_request = TextIngestionRequest(
-                text=persisted_raw_input.raw_payload,
+                text=decrypted_text,
                 group_id=persisted_raw_input.group_id,
                 privacy=privacy_enum,
                 allowed_users=structured.get("allowed_users", []),
@@ -120,11 +130,24 @@ class MindMeshOrchestrator:
 
             # 6. Persist complete MemoryV1 JSONB in phase1_outputs table
             logger.info("[Storage] Saving Phase 1 output...")
+            output_payload = memory.model_dump(mode="json")
+            if is_private_locker and isinstance(output_payload.get("content"), dict):
+                c_dict = dict(output_payload["content"])
+                if c_dict.get("clean_text"):
+                    c_dict["clean_text"] = locker_crypto.encrypt(c_dict["clean_text"])
+                if c_dict.get("raw_text"):
+                    c_dict["raw_text"] = locker_crypto.encrypt(c_dict["raw_text"])
+                if c_dict.get("summary"):
+                    c_dict["summary"] = locker_crypto.encrypt(c_dict["summary"])
+                output_payload["content"] = c_dict
+
             phase1_output = await self.phase1_output_repo.create(
                 raw_input_id=persisted_raw_input.id,
                 memory_id=memory.memory_id,
                 schema_version=memory.schema_version,
-                payload=memory.model_dump(mode="json"),
+                payload=output_payload,
+                owner_id=persisted_raw_input.owner_id,
+                privacy=persisted_raw_input.privacy,
                 processing_status=memory.processing.status,
                 extractor_model=memory.processing.llm_model,
             )
@@ -229,11 +252,16 @@ class MindMeshOrchestrator:
 
         # 3. Persist raw input record into PostgreSQL
         logger.info("[Storage] Saving raw input record to PostgreSQL...")
+        is_private_locker = (privacy_str == Privacy.PRIVATE_LOCKER.value)
+        payload_to_store = locker_crypto.encrypt(raw_description) if is_private_locker else raw_description
+
         raw_input = await self.raw_input_repo.create(
             media_type=MediaType.IMAGE.value,
-            raw_payload=raw_description,
+            raw_payload=payload_to_store,
             structured_payload=structured_payload,
             client_id=current_user.id,
+            owner_id=current_user.id,
+            privacy=privacy_str,
             group_id=group_id,
             status="received",
             input_id=input_id,
@@ -299,11 +327,24 @@ class MindMeshOrchestrator:
 
             # 7. Persist complete MemoryV1 JSONB
             logger.info("[Storage] Saving Phase 1 output...")
+            output_payload = memory.model_dump(mode="json")
+            if is_private_locker and isinstance(output_payload.get("content"), dict):
+                c_dict = dict(output_payload["content"])
+                if c_dict.get("clean_text"):
+                    c_dict["clean_text"] = locker_crypto.encrypt(c_dict["clean_text"])
+                if c_dict.get("description"):
+                    c_dict["description"] = locker_crypto.encrypt(c_dict["description"])
+                if c_dict.get("summary"):
+                    c_dict["summary"] = locker_crypto.encrypt(c_dict["summary"])
+                output_payload["content"] = c_dict
+
             phase1_output = await self.phase1_output_repo.create(
                 raw_input_id=persisted_raw_input.id,
                 memory_id=memory.memory_id,
                 schema_version=memory.schema_version,
-                payload=memory.model_dump(mode="json"),
+                payload=output_payload,
+                owner_id=persisted_raw_input.owner_id,
+                privacy=persisted_raw_input.privacy,
                 processing_status=memory.processing.status,
                 extractor_model=memory.processing.llm_model,
             )
@@ -416,11 +457,16 @@ class MindMeshOrchestrator:
 
         # 3. Persist raw input record to PostgreSQL before Phase 1 processing
         logger.info("[Storage] Saving raw input record to PostgreSQL...")
+        is_private_locker = (privacy_str == Privacy.PRIVATE_LOCKER.value)
+        payload_to_store = locker_crypto.encrypt(raw_description) if is_private_locker else raw_description
+
         raw_input = await self.raw_input_repo.create(
             media_type=MediaType.AUDIO.value,
-            raw_payload=raw_description,
+            raw_payload=payload_to_store,
             structured_payload=structured_payload,
             client_id=current_user.id,
+            owner_id=current_user.id,
+            privacy=privacy_str,
             group_id=group_id,
             status="received",
             input_id=input_id,
@@ -486,11 +532,24 @@ class MindMeshOrchestrator:
 
             # 7. Persist complete MemoryV1 JSONB in phase1_outputs table
             logger.info("[Storage] Saving Phase 1 output...")
+            output_payload = memory.model_dump(mode="json")
+            if is_private_locker and isinstance(output_payload.get("content"), dict):
+                c_dict = dict(output_payload["content"])
+                if c_dict.get("clean_text"):
+                    c_dict["clean_text"] = locker_crypto.encrypt(c_dict["clean_text"])
+                if c_dict.get("raw_text"):
+                    c_dict["raw_text"] = locker_crypto.encrypt(c_dict["raw_text"])
+                if c_dict.get("summary"):
+                    c_dict["summary"] = locker_crypto.encrypt(c_dict["summary"])
+                output_payload["content"] = c_dict
+
             phase1_output = await self.phase1_output_repo.create(
                 raw_input_id=persisted_raw_input.id,
                 memory_id=memory.memory_id,
                 schema_version=memory.schema_version,
-                payload=memory.model_dump(mode="json"),
+                payload=output_payload,
+                owner_id=persisted_raw_input.owner_id,
+                privacy=persisted_raw_input.privacy,
                 processing_status=memory.processing.status,
                 extractor_model=memory.processing.llm_model,
             )

@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -7,16 +7,16 @@ import {
   ScrollView,
   Image,
   StyleSheet,
-  SafeAreaView,
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { MindMeshLogo } from '../components/MindMeshLogo';
 import { FloatingBottomDock } from '../components/FloatingBottomDock';
-import { MemoryItem, ScreenId, SearchResultItem } from '../types';
-import { searchMemories } from '../services/apiClient';
+import { MemoryItem, ScreenId, SearchResultItem, Group } from '../types';
+import { searchMemories, getGroups } from '../services/apiClient';
 import { convertSearchResultToMemoryItem } from '../services/memoryAdapter';
 import { getApiUrl } from '../config/apiConfig';
 import { useAuth } from '../auth/AuthContext';
@@ -56,7 +56,13 @@ export const VaultScreen: React.FC<VaultProps> = ({
   const [inputText, setInputText] = useState('');
   const [conversation, setConversation] = useState<VaultTurn[]>([]);
   const [isSearching, setIsSearching] = useState(false);
+  const [availableGroups, setAvailableGroups] = useState<Group[]>([]);
+  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const scrollViewRef = useRef<ScrollView>(null);
+
+  useEffect(() => {
+    getGroups().then(setAvailableGroups).catch(() => {});
+  }, []);
 
   const handleSendQuery = async (textToSend?: string) => {
     const q = (textToSend !== undefined ? textToSend : inputText).trim();
@@ -91,6 +97,7 @@ export const VaultScreen: React.FC<VaultProps> = ({
         content_weight: 0.5,
         context_weight: 0.5,
         generate_answer: true,
+        group_id: selectedGroupId || undefined,
       });
 
       setConversation((prev) =>
@@ -134,13 +141,22 @@ export const VaultScreen: React.FC<VaultProps> = ({
         style={styles.container}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
-        {/* Top Header */}
+        {/* Top Header with Back to Stream */}
         <View style={styles.topHeader}>
+          <TouchableOpacity
+            style={styles.backButton}
+            onPress={() => onNavigate('home')}
+            activeOpacity={0.8}
+          >
+            <Ionicons name="arrow-back" size={18} color="#4A6B53" />
+            <Text style={styles.backButtonText}>Stream</Text>
+          </TouchableOpacity>
+
           <View style={styles.logoGroup}>
             <MindMeshLogo size="sm" withText={false} />
             <View>
               <Text style={styles.headerTitle}>Memory Vault</Text>
-              <Text style={styles.headerSubtitle}>Conversational Memory RAG</Text>
+              <Text style={styles.headerSubtitle}>Conversational RAG</Text>
             </View>
           </View>
 
@@ -162,6 +178,54 @@ export const VaultScreen: React.FC<VaultProps> = ({
             </View>
           </View>
         </View>
+
+        {/* Group Filter Chips */}
+        {availableGroups.length > 0 && (
+          <View style={styles.groupFilterBar}>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.groupFilterScroll}>
+              <TouchableOpacity
+                style={[
+                  styles.groupFilterChip,
+                  selectedGroupId === null && styles.groupFilterChipActive,
+                ]}
+                onPress={() => setSelectedGroupId(null)}
+              >
+                <Text
+                  style={[
+                    styles.groupFilterText,
+                    selectedGroupId === null && styles.groupFilterTextActive,
+                  ]}
+                >
+                  All Memories
+                </Text>
+              </TouchableOpacity>
+              {availableGroups.map((g) => (
+                <TouchableOpacity
+                  key={g.id}
+                  style={[
+                    styles.groupFilterChip,
+                    selectedGroupId === g.id && styles.groupFilterChipActive,
+                  ]}
+                  onPress={() => setSelectedGroupId(selectedGroupId === g.id ? null : g.id)}
+                >
+                  <Ionicons
+                    name="people"
+                    size={12}
+                    color={selectedGroupId === g.id ? '#FFFFFF' : '#4A6B53'}
+                  />
+                  <Text
+                    style={[
+                      styles.groupFilterText,
+                      selectedGroupId === g.id && styles.groupFilterTextActive,
+                    ]}
+                  >
+                    {g.name}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        )}
 
         {/* Conversation Stream */}
         <ScrollView
@@ -471,6 +535,22 @@ const styles = StyleSheet.create({
     paddingBottom: 12,
     borderBottomWidth: 1,
     borderBottomColor: '#EBE5D8',
+  },
+  backButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    borderRadius: 10,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#D5CDBC',
+  },
+  backButtonText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#4A6B53',
   },
   logoGroup: {
     flexDirection: 'row',
@@ -889,5 +969,38 @@ const styles = StyleSheet.create({
   },
   sendButtonDisabled: {
     backgroundColor: '#C5D6C9',
+  },
+  groupFilterBar: {
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5DFD5',
+    backgroundColor: '#FAF7F0',
+  },
+  groupFilterScroll: {
+    paddingHorizontal: 16,
+    gap: 8,
+  },
+  groupFilterChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 14,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#D5CDBC',
+    gap: 5,
+  },
+  groupFilterChipActive: {
+    backgroundColor: '#4A6B53',
+    borderColor: '#4A6B53',
+  },
+  groupFilterText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#5E7A64',
+  },
+  groupFilterTextActive: {
+    color: '#FFFFFF',
   },
 });

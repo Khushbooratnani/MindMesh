@@ -263,6 +263,10 @@ def test_audio_api_endpoint():
 
 def test_dataset_manifest_parser_counts():
     """Verify parse_dataset_manifest correctly parses the 91 dataset rows."""
+    from app.tools.dataset_runner import get_default_dataset_paths
+    csv_path, _ = get_default_dataset_paths()
+    if not csv_path.exists():
+        pytest.skip(f"Dataset manifest CSV not found at {csv_path}")
     samples = parse_dataset_manifest()
     assert len(samples) == 91
 

@@ -6,11 +6,14 @@ export type ScreenId =
   | 'home'
   | 'composer'
   | 'memory_detail'
-  | 'vault';
+  | 'vault'
+  | 'locker'
+  | 'groups'
+  | 'group_detail';
 
 export type MemoryType = 'note' | 'photo' | 'voice' | 'receipt' | 'location';
 export type MediaType = 'text' | 'image' | 'audio';
-export type Privacy = 'ONLY_ME' | 'GROUP' | 'PUBLIC' | 'SELECTED';
+export type Privacy = 'ONLY_ME' | 'GROUP' | 'SELECTED' | 'PRIVATE_LOCKER';
 export type Sentiment = 'positive' | 'neutral' | 'negative' | 'mixed' | 'unknown';
 export type TimeOfDay = 'morning' | 'afternoon' | 'evening' | 'night' | 'unknown';
 
@@ -106,9 +109,14 @@ export interface MemoryItem {
   transcript?: string;
   audioUri?: string;
   imageUri?: string;
+  mediaUrl?: string;
+  localMediaUri?: string;
   tags: string[];
   sentiment?: 'positive' | 'neutral' | 'reflective' | 'excited';
   privacy: 'private' | 'group' | 'encrypted';
+  isEncrypted?: boolean;
+  timeOfDay?: string;
+  created_at?: string;
   groupName?: string;
   entities?: { name: string; type: 'person' | 'place' | 'concept' | 'date' | 'amount' }[];
   rawMemoryV1?: MemoryV1;
@@ -188,4 +196,79 @@ export interface FeedResponse {
   total_count: number;
   items: RawFeedItem[];
 }
+
+export type GroupRole = 'OWNER' | 'ADMIN' | 'CONTRIBUTOR' | 'MEMBER' | 'GUEST';
+
+export interface Group {
+  id: string;
+  name: string;
+  description?: string | null;
+  creator_id: string;
+  is_archived: boolean;
+  member_count?: number;
+  my_role?: GroupRole;
+  created_at: string;
+  updated_at?: string;
+}
+
+export interface GroupMember {
+  id: string;
+  group_id: string;
+  user_id: string;
+  username: string;
+  role: GroupRole;
+  joined_at: string;
+}
+
+export interface GroupInvitation {
+  id: string;
+  group_id: string;
+  group_name?: string;
+  inviter_id: string;
+  invitee_email: string;
+  role: GroupRole;
+  status: 'pending' | 'accepted' | 'rejected' | 'revoked' | 'expired';
+  invitation_token?: string;
+  expires_at: string;
+  created_at: string;
+}
+
+export interface CommentItem {
+  id: string;
+  memory_id: string;
+  author_id: string;
+  author_username: string;
+  content: string;
+  is_knowledge_eligible: boolean;
+  derived_memory_id?: string | null;
+  created_at: string;
+  updated_at?: string;
+}
+
+export interface GroupShare {
+  id: string;
+  group_id: string;
+  granted_by: string;
+  created_at: string;
+}
+
+export interface UserShare {
+  id: string;
+  user_id: string;
+  permissions: string[];
+  granted_by: string;
+  created_at: string;
+}
+
+export interface MemorySharesResponse {
+  memory_id: string;
+  group_shares: GroupShare[];
+  user_shares: UserShare[];
+}
+
+export interface UserSearchResult {
+  id: string;
+  username: string;
+}
+
 

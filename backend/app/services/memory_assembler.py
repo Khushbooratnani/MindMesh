@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from typing import Any
 from uuid import uuid4
 
 from app.core.enums import MediaType
@@ -7,6 +8,7 @@ from app.schemas.extraction_output import ExtractionOutput
 from app.schemas.memory_output import (
     ContentFields,
     EntityFields,
+    MediaReference,
     MemoryV1,
     ProcessingFields,
     SemanticFields,
@@ -23,7 +25,11 @@ class MemoryAssembler:
         extraction: ExtractionOutput,
         llm_provider: str,
         llm_model: str,
+        media_reference: Any | None = None,
+        user_context: str | None = None,
     ) -> MemoryV1:
+        resolved_media_ref = media_reference or canonical_input.media_reference or system_context.media_reference
+        resolved_user_context = user_context if user_context is not None else (canonical_input.user_context or system_context.user_context)
         return MemoryV1(
             memory_id=f"M_{uuid4().hex}",
             system=SystemFields(
@@ -39,7 +45,10 @@ class MemoryAssembler:
                 clean_text=canonical_input.source_text,
                 description=extraction.description,
                 summary=extraction.summary,
+                user_context=resolved_user_context,
             ),
+            user_context=resolved_user_context,
+            media=resolved_media_ref,
             entities=EntityFields(**extraction.entities.model_dump()),
             semantics=SemanticFields(**extraction.semantics.model_dump()),
             temporal=TemporalFields(**extraction.temporal.model_dump()),

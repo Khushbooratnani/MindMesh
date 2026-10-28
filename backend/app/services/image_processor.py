@@ -2,7 +2,7 @@ import base64
 import mimetypes
 from pathlib import Path
 
-import httpx2
+import httpx
 
 from app.config import settings
 from app.core.enums import MediaType
@@ -96,7 +96,7 @@ class ImageProcessor:
             headers["Authorization"] = f"Bearer {self.api_key}"
 
         try:
-            with httpx2.Client(timeout=self.timeout_seconds) as client:
+            with httpx.Client(timeout=self.timeout_seconds) as client:
                 response = client.post(
                     _chat_completions_url(self.base_url),
                     headers=headers,

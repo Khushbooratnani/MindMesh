@@ -20,6 +20,7 @@ class ContentFields(BaseModel):
     clean_text: str
     description: str
     summary: str
+    user_context: str | None = None
 
 
 class EntityFields(BaseModel):
@@ -43,6 +44,17 @@ class TemporalFields(BaseModel):
     time_of_day: Literal["morning", "afternoon", "evening", "night", "unknown"] | None = None
 
 
+class MediaReference(BaseModel):
+    storage_key: str
+    relative_path: str
+    original_filename: str
+    media_type: str
+    content_type: str | None = None
+    size_bytes: int
+    sha256: str
+    created_at: str | None = None
+
+
 class ProcessingFields(BaseModel):
     status: Literal["completed", "failed", "partial"]
     source_modality: MediaType
@@ -58,6 +70,8 @@ class MemoryV1(BaseModel):
     schema_version: Literal["1.0"] = "1.0"
     system: SystemFields
     content: ContentFields
+    user_context: str | None = None
+    media: MediaReference | None = None
     entities: EntityFields
     semantics: SemanticFields
     temporal: TemporalFields

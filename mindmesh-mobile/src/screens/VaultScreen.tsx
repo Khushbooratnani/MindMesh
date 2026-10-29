@@ -102,51 +102,9 @@ export const VaultScreen: React.FC<VaultProps> = ({
   const [searchMode, setSearchMode] = useState<'nearby' | 'hybrid' | 'graph' | 'vector'>('nearby');
   const [customLocationText, setCustomLocationText] = useState('');
 
-  const fetchCurrentLocation = () => {
-    if (typeof navigator !== 'undefined' && navigator.geolocation) {
-      setIsDetectingLocation(true);
-      navigator.geolocation.getCurrentPosition(
-        (pos) => {
-          const lat = pos.coords.latitude;
-          const lon = pos.coords.longitude;
-
-          // Find nearest preset city if within 80km
-          let nearestName = 'My Location';
-          let minDistance = Infinity;
-          for (const pc of PRESET_CITIES) {
-            const d = getHaversineKm(lat, lon, pc.latitude, pc.longitude);
-            if (d < minDistance) {
-              minDistance = d;
-              if (d < 80) {
-                nearestName = `My Location (${pc.name})`;
-              }
-            }
-          }
-
-          const gpsCity: CityOption = {
-            id: 'current_gps',
-            name: nearestName,
-            state: 'GPS',
-            latitude: lat,
-            longitude: lon,
-          };
-          setCurrentGpsCity(gpsCity);
-          setSelectedCity(gpsCity);
-          setIsDetectingLocation(false);
-          console.log('[GPS] Detected current location:', lat, lon, nearestName);
-        },
-        (err) => {
-          console.warn('[GPS] Geolocation error or permission denied:', err?.message);
-          setIsDetectingLocation(false);
-        },
-        { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 }
-      );
-    }
-  };
-
   useEffect(() => {
     getGroups().then(setAvailableGroups).catch(() => {});
-    fetchCurrentLocation();
+    handleLocateMe();
   }, []);
 
   const handleSendQuery = async (textToSend?: string) => {
@@ -297,6 +255,71 @@ export const VaultScreen: React.FC<VaultProps> = ({
       );
     } finally {
       setIsSearching(false);
+    }
+  };
+
+  const handleLocateMe = () => {
+    const defaultCity = PRESET_CITIES[0]; // Dehradun default (30.3165, 78.0322)
+    // 1. Instantly shift selection to Dehradun
+    setSelectedCity(defaultCity);
+    setSearchScope('nearby');
+    setCustomLocationText('');
+    setCurrentGpsCity(null);
+
+    // 2. Immediately re-run active query with Dehradun if one exists
+    if (conversation.length > 0) {
+      handleRerunQueryWithRadius(radiusKm, defaultCity, 'nearby');
+    }
+
+    // 3. Query browser GPS for fine-tuning
+    if (typeof navigator !== 'undefined' && navigator.geolocation) {
+      setIsDetectingLocation(true);
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          const lat = pos.coords.latitude;
+          const lon = pos.coords.longitude;
+
+          // Find nearest preset city
+          let nearestCity = defaultCity;
+          let minDistance = Infinity;
+          for (const pc of PRESET_CITIES) {
+            const d = getHaversineKm(lat, lon, pc.latitude, pc.longitude);
+            if (d < minDistance) {
+              minDistance = d;
+              nearestCity = pc;
+            }
+          }
+
+          let targetCity: CityOption;
+          if (minDistance < 80) {
+            targetCity = nearestCity;
+          } else {
+            targetCity = {
+              id: 'current_gps',
+              name: `My Location (${lat.toFixed(2)}°, ${lon.toFixed(2)}°)`,
+              state: 'GPS',
+              latitude: lat,
+              longitude: lon,
+            };
+            setCurrentGpsCity(targetCity);
+          }
+          setSelectedCity(targetCity);
+          setIsDetectingLocation(false);
+          console.log('[GPS] Detected current location:', lat, lon, targetCity.name);
+          if (conversation.length > 0 && targetCity.id !== defaultCity.id) {
+            handleRerunQueryWithRadius(radiusKm, targetCity, 'nearby');
+          }
+        },
+        (err) => {
+          console.warn('[GPS] Geolocation error or permission denied:', err?.message);
+          setSelectedCity(defaultCity);
+          setIsDetectingLocation(false);
+        },
+        { enableHighAccuracy: true, timeout: 5000, maximumAge: 30000 }
+      );
+    } else {
+      setSelectedCity(defaultCity);
+      setIsDetectingLocation(false);
     }
   };
 
@@ -473,9 +496,7 @@ export const VaultScreen: React.FC<VaultProps> = ({
               )}
               <Text style={styles.activeCoordsText} numberOfLines={1}>
                 {searchScope === 'nearby'
-                  ? isDetectingLocation
-                    ? 'Detecting GPS...'
-                    : `${selectedCity.name} (${selectedCity.latitude.toFixed(2)}°, ${selectedCity.longitude.toFixed(2)}°)`
+                  ? `${selectedCity.name} (${selectedCity.latitude.toFixed(2)}°, ${selectedCity.longitude.toFixed(2)}°)`
                   : 'Worldwide (Global)'}
               </Text>
             </View>
@@ -509,9 +530,8 @@ export const VaultScreen: React.FC<VaultProps> = ({
                 </View>
                 <TouchableOpacity
                   style={styles.locateMeBtn}
-                  onPress={fetchCurrentLocation}
+                  onPress={handleLocateMe}
                   activeOpacity={0.8}
-                  disabled={isDetectingLocation}
                 >
                   <Ionicons name="navigate-circle-outline" size={12} color="#2D5A3D" />
                   <Text style={styles.locateMeBtnText}>

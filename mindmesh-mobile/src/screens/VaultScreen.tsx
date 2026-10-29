@@ -61,6 +61,20 @@ const PRESET_CITIES: CityOption[] = [
   { id: 'indiranagar', name: 'Indiranagar', state: 'Bengaluru', latitude: 12.9784, longitude: 77.6408 },
 ];
 
+function getHaversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
 const SUGGESTED_QUERIES = [
   'What did I do in Goa?',
   'Where did I have coffee recently?',
@@ -81,13 +95,58 @@ export const VaultScreen: React.FC<VaultProps> = ({
   const scrollViewRef = useRef<ScrollView>(null);
   // Default to Nearby search with location coordinates!
   const [searchScope, setSearchScope] = useState<'nearby' | 'global'>('nearby');
-  const [selectedCity, setSelectedCity] = useState<CityOption>(PRESET_CITIES[0]); // Dehradun default (30.3165, 78.0322)
+  const [selectedCity, setSelectedCity] = useState<CityOption>(PRESET_CITIES[0]); // Dehradun default
+  const [currentGpsCity, setCurrentGpsCity] = useState<CityOption | null>(null);
+  const [isDetectingLocation, setIsDetectingLocation] = useState(false);
   const [radiusKm, setRadiusKm] = useState<number>(10); // 10 km default radius
   const [searchMode, setSearchMode] = useState<'nearby' | 'hybrid' | 'graph' | 'vector'>('nearby');
   const [customLocationText, setCustomLocationText] = useState('');
 
+  const fetchCurrentLocation = () => {
+    if (typeof navigator !== 'undefined' && navigator.geolocation) {
+      setIsDetectingLocation(true);
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          const lat = pos.coords.latitude;
+          const lon = pos.coords.longitude;
+
+          // Find nearest preset city if within 80km
+          let nearestName = 'My Location';
+          let minDistance = Infinity;
+          for (const pc of PRESET_CITIES) {
+            const d = getHaversineKm(lat, lon, pc.latitude, pc.longitude);
+            if (d < minDistance) {
+              minDistance = d;
+              if (d < 80) {
+                nearestName = `My Location (${pc.name})`;
+              }
+            }
+          }
+
+          const gpsCity: CityOption = {
+            id: 'current_gps',
+            name: nearestName,
+            state: 'GPS',
+            latitude: lat,
+            longitude: lon,
+          };
+          setCurrentGpsCity(gpsCity);
+          setSelectedCity(gpsCity);
+          setIsDetectingLocation(false);
+          console.log('[GPS] Detected current location:', lat, lon, nearestName);
+        },
+        (err) => {
+          console.warn('[GPS] Geolocation error or permission denied:', err?.message);
+          setIsDetectingLocation(false);
+        },
+        { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 }
+      );
+    }
+  };
+
   useEffect(() => {
     getGroups().then(setAvailableGroups).catch(() => {});
+    fetchCurrentLocation();
   }, []);
 
   const handleSendQuery = async (textToSend?: string) => {
@@ -403,14 +462,20 @@ export const VaultScreen: React.FC<VaultProps> = ({
 
             {/* Current Active Location Info Badge */}
             <View style={styles.activeCoordsBadge}>
-              <Ionicons
-                name="location"
-                size={12}
-                color={searchScope === 'nearby' ? '#2D5A3D' : '#8A9E8F'}
-              />
+              {isDetectingLocation ? (
+                <ActivityIndicator size="small" color="#2D5A3D" style={{ marginRight: 2 }} />
+              ) : (
+                <Ionicons
+                  name={selectedCity.id === 'current_gps' ? 'navigate-circle' : 'location'}
+                  size={12}
+                  color={searchScope === 'nearby' ? '#2D5A3D' : '#8A9E8F'}
+                />
+              )}
               <Text style={styles.activeCoordsText} numberOfLines={1}>
                 {searchScope === 'nearby'
-                  ? `${selectedCity.name} (${selectedCity.latitude.toFixed(2)}°, ${selectedCity.longitude.toFixed(2)}°)`
+                  ? isDetectingLocation
+                    ? 'Detecting GPS...'
+                    : `${selectedCity.name} (${selectedCity.latitude.toFixed(2)}°, ${selectedCity.longitude.toFixed(2)}°)`
                   : 'Worldwide (Global)'}
               </Text>
             </View>
@@ -438,8 +503,21 @@ export const VaultScreen: React.FC<VaultProps> = ({
           {searchScope === 'nearby' && (
             <View style={styles.citySelectionContainer}>
               <View style={styles.citySelectionHeader}>
-                <Ionicons name="business-outline" size={13} color="#4A6B53" />
-                <Text style={styles.citySelectionLabel}>Choose City:</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+                  <Ionicons name="business-outline" size={13} color="#4A6B53" />
+                  <Text style={styles.citySelectionLabel}>Choose City:</Text>
+                </View>
+                <TouchableOpacity
+                  style={styles.locateMeBtn}
+                  onPress={fetchCurrentLocation}
+                  activeOpacity={0.8}
+                  disabled={isDetectingLocation}
+                >
+                  <Ionicons name="navigate-circle-outline" size={12} color="#2D5A3D" />
+                  <Text style={styles.locateMeBtnText}>
+                    {isDetectingLocation ? 'Locating...' : 'Locate Me'}
+                  </Text>
+                </TouchableOpacity>
               </View>
 
               <ScrollView
@@ -447,14 +525,17 @@ export const VaultScreen: React.FC<VaultProps> = ({
                 showsHorizontalScrollIndicator={false}
                 contentContainerStyle={styles.cityScrollRow}
               >
-                {PRESET_CITIES.map((city) => {
+                {(currentGpsCity ? [currentGpsCity, ...PRESET_CITIES] : PRESET_CITIES).map((city) => {
                   const isCityActive = selectedCity.id === city.id;
+                  const isGps = city.id === 'current_gps';
                   return (
                     <TouchableOpacity
                       key={city.id}
                       style={[
                         styles.cityChip,
                         isCityActive && styles.cityChipActive,
+                        isGps && styles.cityChipGps,
+                        isGps && isCityActive && styles.cityChipGpsActive,
                       ]}
                       onPress={() => {
                         setSelectedCity(city);
@@ -465,14 +546,15 @@ export const VaultScreen: React.FC<VaultProps> = ({
                       activeOpacity={0.8}
                     >
                       <Ionicons
-                        name={isCityActive ? 'location' : 'location-outline'}
+                        name={isGps ? 'navigate-circle' : isCityActive ? 'location' : 'location-outline'}
                         size={12}
-                        color={isCityActive ? '#FFFFFF' : '#4A6B53'}
+                        color={isCityActive ? '#FFFFFF' : isGps ? '#1E6B35' : '#4A6B53'}
                       />
                       <Text
                         style={[
                           styles.cityChipText,
                           isCityActive && styles.cityChipTextActive,
+                          isGps && !isCityActive && styles.cityChipGpsText,
                         ]}
                       >
                         {city.name}
@@ -1505,13 +1587,40 @@ const styles = StyleSheet.create({
   citySelectionHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 5,
+    justifyContent: 'space-between',
     paddingLeft: 4,
+    paddingRight: 4,
   },
   citySelectionLabel: {
     fontSize: 11,
     fontWeight: '700',
     color: '#4A6B53',
+  },
+  locateMeBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: '#E2EFE5',
+    paddingVertical: 2,
+    paddingHorizontal: 6,
+    borderRadius: 6,
+  },
+  locateMeBtnText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#2D5A3D',
+  },
+  cityChipGps: {
+    backgroundColor: '#EBF5EE',
+    borderColor: '#4A8C5D',
+  },
+  cityChipGpsActive: {
+    backgroundColor: '#1E6B35',
+    borderColor: '#1E6B35',
+  },
+  cityChipGpsText: {
+    color: '#1E6B35',
+    fontWeight: '800',
   },
   cityScrollRow: {
     flexDirection: 'row',

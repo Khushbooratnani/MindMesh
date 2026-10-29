@@ -195,6 +195,7 @@ class MemorySearchService:
                     SELECT
                         p.memory_id,
                         p.payload->'content'->>'summary' AS summary,
+                        p.payload             AS memory_json,
                         l.display_name        AS location,
                         l.latitude,
                         l.longitude,
@@ -234,6 +235,7 @@ class MemorySearchService:
                         "longitude": float(row["longitude"]),
                         "distance_meters": round(dist, 2),
                         "location_confidence": float(row.get("location_confidence") or 1.0),
+                        "memory_json": row.get("memory_json") or {},
                     })
             results.sort(key=lambda r: r["distance_meters"])
             logger.info("[Nearby] Found %d memories within %s km of (%s, %s)", len(results), radius_km, latitude, longitude)
@@ -258,6 +260,7 @@ class MemorySearchService:
         radius_km: float,
         query_terms: list[str],
         limit: int,
+        mode: str = "hybrid",
     ) -> list[dict]:
         """
         Nearby search strictly within radius_km fused with vector/graph hybrid scores.
@@ -278,6 +281,7 @@ class MemorySearchService:
         radius_m = radius_km * 1000.0
 
         fused: list[dict] = []
+        fused_ids = set()
         for result in vector_results:
             nearby = nearby_by_id.get(result["memory_id"])
             if nearby is None:
@@ -302,9 +306,37 @@ class MemorySearchService:
                 "location_match_type": location_match_type,
                 "search_radius_km": radius_km,
             })
+            fused_ids.add(result["memory_id"])
+
+        # When in 'nearby' mode or if vector search missed nearby candidate spots, include them
+        for nearby in nearby_results:
+            mid = nearby["memory_id"]
+            if mid not in fused_ids:
+                dist_score = max(0.0, 1.0 - float(nearby["distance_meters"]) / radius_m)
+                mem_json = nearby.get("memory_json") or {}
+                content = mem_json.get("content", {})
+                summary = nearby.get("summary") or content.get("summary") or content.get("clean_text") or ""
+                fused.append({
+                    "memory_id": mid,
+                    "similarity_score": round(dist_score, 4),
+                    "score": round(dist_score * (0.85 if mode == "nearby" else 0.5), 4),
+                    "matched_by": ["haversine"],
+                    "summary": summary,
+                    "location": nearby["location"],
+                    "latitude": nearby["latitude"],
+                    "longitude": nearby["longitude"],
+                    "distance_meters": nearby["distance_meters"],
+                    "location_confidence": nearby["location_confidence"],
+                    "location_match_type": location_match_type,
+                    "search_radius_km": radius_km,
+                    "memory_json": mem_json,
+                })
 
         logger.info("[Nearby] Fused results count: %d", len(fused))
-        fused.sort(key=lambda r: r["score"], reverse=True)
+        if mode == "nearby":
+            fused.sort(key=lambda r: (r.get("distance_meters", 999999), -r["score"]))
+        else:
+            fused.sort(key=lambda r: r["score"], reverse=True)
         return fused[:limit]
 
     # ------------------------------------------------------------------
@@ -493,6 +525,7 @@ class MemorySearchService:
                 radius_km=radius_km or 10.0,
                 query_terms=query_terms,
                 limit=top_k * 2,
+                mode=mode,
             )
 
         if not merged_results:

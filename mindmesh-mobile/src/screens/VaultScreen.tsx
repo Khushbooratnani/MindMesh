@@ -43,6 +43,24 @@ interface VaultProps {
   onSelectMemory: (memory: MemoryItem) => void;
 }
 
+interface CityOption {
+  id: string;
+  name: string;
+  state: string;
+  latitude: number;
+  longitude: number;
+}
+
+const PRESET_CITIES: CityOption[] = [
+  { id: 'dehradun', name: 'Dehradun', state: 'Uttarakhand', latitude: 30.3165, longitude: 78.0322 },
+  { id: 'goa', name: 'Goa', state: 'Goa', latitude: 15.2993, longitude: 74.1240 },
+  { id: 'pune', name: 'Pune', state: 'Maharashtra', latitude: 18.5204, longitude: 73.8567 },
+  { id: 'delhi', name: 'Delhi', state: 'Delhi', latitude: 28.6139, longitude: 77.2090 },
+  { id: 'mumbai', name: 'Mumbai', state: 'Maharashtra', latitude: 19.0760, longitude: 72.8777 },
+  { id: 'bengaluru', name: 'Bengaluru', state: 'Karnataka', latitude: 12.9716, longitude: 77.5946 },
+  { id: 'indiranagar', name: 'Indiranagar', state: 'Bengaluru', latitude: 12.9784, longitude: 77.6408 },
+];
+
 const SUGGESTED_QUERIES = [
   'What did I do in Goa?',
   'Where did I have coffee recently?',
@@ -61,11 +79,12 @@ export const VaultScreen: React.FC<VaultProps> = ({
   const [availableGroups, setAvailableGroups] = useState<Group[]>([]);
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const scrollViewRef = useRef<ScrollView>(null);
-  // Distance Radius (0 to 15 km) & Location-aware state
-  const [radiusKm, setRadiusKm] = useState<number | null>(null); // null = Global / Off
-  const [selectedPlace, setSelectedPlace] = useState('Dehradun');
-  const [locationQuery, setLocationQuery] = useState('Dehradun');
-  const [searchMode, setSearchMode] = useState<'hybrid' | 'nearby' | 'graph' | 'vector'>('hybrid');
+  // Default to Nearby search with location coordinates!
+  const [searchScope, setSearchScope] = useState<'nearby' | 'global'>('nearby');
+  const [selectedCity, setSelectedCity] = useState<CityOption>(PRESET_CITIES[0]); // Dehradun default (30.3165, 78.0322)
+  const [radiusKm, setRadiusKm] = useState<number>(10); // 10 km default radius
+  const [searchMode, setSearchMode] = useState<'nearby' | 'hybrid' | 'graph' | 'vector'>('nearby');
+  const [customLocationText, setCustomLocationText] = useState('');
 
   useEffect(() => {
     getGroups().then(setAvailableGroups).catch(() => {});
@@ -86,8 +105,8 @@ export const VaultScreen: React.FC<VaultProps> = ({
       }),
       isLoading: true,
       error: null,
-      radiusKm: radiusKm,
-      locationName: radiusKm !== null ? (locationQuery.trim() || selectedPlace) : null,
+      radiusKm: searchScope === 'nearby' ? radiusKm : null,
+      locationName: searchScope === 'nearby' ? `${selectedCity.name} (${selectedCity.latitude.toFixed(2)}°, ${selectedCity.longitude.toFixed(2)}°)` : null,
       response: null,
     };
 
@@ -100,10 +119,13 @@ export const VaultScreen: React.FC<VaultProps> = ({
     }, 100);
 
     try {
-      const locationParams: Record<string, any> = { mode: searchMode };
-      if (radiusKm !== null && radiusKm > 0) {
+      const locationParams: Record<string, any> = { mode: searchScope === 'nearby' ? 'nearby' : searchMode };
+      if (searchScope === 'nearby') {
+        locationParams.latitude = selectedCity.latitude;
+        locationParams.longitude = selectedCity.longitude;
         locationParams.radius_km = radiusKm;
-        locationParams.location_query = locationQuery.trim() || selectedPlace || 'Dehradun';
+        locationParams.location_query = selectedCity.name;
+        locationParams.mode = 'nearby';
       }
       const response = await searchMemories({
         query: q,
@@ -123,7 +145,7 @@ export const VaultScreen: React.FC<VaultProps> = ({
         )
       );
     } catch (err: any) {
-      console.error('Vault search error:', err);
+      console.error('MindSeek search error:', err);
       setConversation((prev) =>
         prev.map((turn) =>
           turn.id === turnId
@@ -132,7 +154,7 @@ export const VaultScreen: React.FC<VaultProps> = ({
                 isLoading: false,
                 error:
                   err?.message ||
-                  'Failed to query memory vault. Please verify server connection.',
+                  'Failed to query MindSeek search. Please verify server connection.',
               }
             : turn
         )
@@ -145,12 +167,17 @@ export const VaultScreen: React.FC<VaultProps> = ({
     }
   };
 
-  const handleRerunQueryWithRadius = async (newRadius?: number | null, newLocation?: string) => {
+  const handleRerunQueryWithRadius = async (
+    newRadius?: number | null,
+    newCity?: CityOption,
+    newScope?: 'nearby' | 'global'
+  ) => {
     if (conversation.length === 0 || isSearching) return;
     const lastTurn = conversation[conversation.length - 1];
     const q = lastTurn.query;
+    const scope = newScope !== undefined ? newScope : searchScope;
     const rKm = newRadius !== undefined ? newRadius : radiusKm;
-    const loc = newLocation !== undefined ? newLocation : (locationQuery.trim() || selectedPlace || 'Dehradun');
+    const city = newCity !== undefined ? newCity : selectedCity;
 
     // Update the last turn to loading state
     setConversation((prev) =>
@@ -159,8 +186,8 @@ export const VaultScreen: React.FC<VaultProps> = ({
           ? {
               ...turn,
               isLoading: true,
-              radiusKm: rKm,
-              locationName: rKm !== null ? loc : null,
+              radiusKm: scope === 'nearby' ? rKm : null,
+              locationName: scope === 'nearby' ? `${city.name} (${city.latitude.toFixed(2)}°, ${city.longitude.toFixed(2)}°)` : null,
               error: null,
             }
           : turn
@@ -169,10 +196,13 @@ export const VaultScreen: React.FC<VaultProps> = ({
     setIsSearching(true);
 
     try {
-      const locationParams: Record<string, any> = { mode: searchMode };
-      if (rKm !== null && rKm > 0) {
+      const locationParams: Record<string, any> = { mode: scope === 'nearby' ? 'nearby' : searchMode };
+      if (scope === 'nearby') {
+        locationParams.latitude = city.latitude;
+        locationParams.longitude = city.longitude;
         locationParams.radius_km = rKm;
-        locationParams.location_query = loc;
+        locationParams.location_query = city.name;
+        locationParams.mode = 'nearby';
       }
       const response = await searchMemories({
         query: q,
@@ -192,7 +222,7 @@ export const VaultScreen: React.FC<VaultProps> = ({
         )
       );
     } catch (err: any) {
-      console.error('Vault re-search error:', err);
+      console.error('MindSeek re-search error:', err);
       setConversation((prev) =>
         prev.map((turn, i) =>
           i === prev.length - 1
@@ -201,7 +231,7 @@ export const VaultScreen: React.FC<VaultProps> = ({
                 isLoading: false,
                 error:
                   err?.message ||
-                  'Failed to query memory vault. Please verify server connection.',
+                  'Failed to query MindSeek search. Please verify server connection.',
               }
             : turn
         )
@@ -236,8 +266,8 @@ export const VaultScreen: React.FC<VaultProps> = ({
           <View style={styles.logoGroup}>
             <MindMeshLogo size="sm" withText={false} />
             <View>
-              <Text style={styles.headerTitle}>Memory Vault</Text>
-              <Text style={styles.headerSubtitle}>Conversational RAG</Text>
+              <Text style={styles.headerTitle}>MindSeek</Text>
+              <Text style={styles.headerSubtitle}>AI Memory Search</Text>
             </View>
           </View>
 
@@ -254,7 +284,7 @@ export const VaultScreen: React.FC<VaultProps> = ({
             )}
             <View style={styles.avatarCircle}>
               <Text style={styles.avatarInitial}>
-                {(user?.name || user?.email || 'U')[0].toUpperCase()}
+                {(user?.name || user?.email || 'U').charAt(0).toUpperCase()}
               </Text>
             </View>
           </View>
@@ -308,114 +338,201 @@ export const VaultScreen: React.FC<VaultProps> = ({
           </View>
         )}
 
-        {/* Distance Radius Bar (0 to 15 km) & Location Scope */}
+        {/* Location & Nearby Proximity Search Bar */}
         <View style={styles.radiusControlContainer}>
+          {/* Top Scope & Action Row */}
           <View style={styles.radiusHeaderRow}>
-            <View style={styles.radiusTitleGroup}>
-              <Ionicons
-                name={radiusKm !== null ? 'radio-outline' : 'globe-outline'}
-                size={16}
-                color={radiusKm !== null ? '#2D5A3D' : '#5E7A64'}
-              />
-              <Text style={styles.radiusTitleText}>
-                {radiusKm !== null
-                  ? `Search Radius: ${radiusKm} km around ${locationQuery.trim() || selectedPlace}`
-                  : 'Search Scope: Global (Worldwide)'}
-              </Text>
-            </View>
-
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-              {conversation.length > 0 && (
-                <TouchableOpacity
-                  style={styles.reSearchBtn}
-                  onPress={() => handleRerunQueryWithRadius(radiusKm, locationQuery.trim() || selectedPlace)}
-                  activeOpacity={0.8}
-                  disabled={isSearching}
-                >
-                  <Ionicons name="refresh" size={12} color="#FFFFFF" />
-                  <Text style={styles.reSearchBtnText}>Re-search</Text>
-                </TouchableOpacity>
-              )}
+            {/* Mode Toggle Pills: Nearby vs Global */}
+            <View style={styles.scopeToggleRow}>
               <TouchableOpacity
                 style={[
-                  styles.radiusToggleBtn,
-                  radiusKm !== null && styles.radiusToggleBtnActive,
+                  styles.scopeModeBtn,
+                  searchScope === 'nearby' && styles.scopeModeBtnActive,
                 ]}
                 onPress={() => {
-                  const nextVal = radiusKm !== null ? null : 10;
-                  setRadiusKm(nextVal);
+                  setSearchScope('nearby');
                   if (conversation.length > 0) {
-                    handleRerunQueryWithRadius(nextVal, locationQuery.trim() || selectedPlace);
+                    handleRerunQueryWithRadius(radiusKm, selectedCity, 'nearby');
                   }
                 }}
                 activeOpacity={0.8}
               >
+                <Ionicons
+                  name="navigate"
+                  size={14}
+                  color={searchScope === 'nearby' ? '#FFFFFF' : '#4A6B53'}
+                />
                 <Text
                   style={[
-                    styles.radiusToggleText,
-                    radiusKm !== null && styles.radiusToggleTextActive,
+                    styles.scopeModeText,
+                    searchScope === 'nearby' && styles.scopeModeTextActive,
                   ]}
                 >
-                  {radiusKm !== null ? 'Reset to Global' : 'Enable Radius'}
+                  Nearby
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[
+                  styles.scopeModeBtn,
+                  searchScope === 'global' && styles.scopeModeBtnActive,
+                ]}
+                onPress={() => {
+                  setSearchScope('global');
+                  if (conversation.length > 0) {
+                    handleRerunQueryWithRadius(null, selectedCity, 'global');
+                  }
+                }}
+                activeOpacity={0.8}
+              >
+                <Ionicons
+                  name="globe-outline"
+                  size={14}
+                  color={searchScope === 'global' ? '#FFFFFF' : '#5E7A64'}
+                />
+                <Text
+                  style={[
+                    styles.scopeModeText,
+                    searchScope === 'global' && styles.scopeModeTextActive,
+                  ]}
+                >
+                  Global
                 </Text>
               </TouchableOpacity>
             </View>
+
+            {/* Current Active Location Info Badge */}
+            <View style={styles.activeCoordsBadge}>
+              <Ionicons
+                name="location"
+                size={12}
+                color={searchScope === 'nearby' ? '#2D5A3D' : '#8A9E8F'}
+              />
+              <Text style={styles.activeCoordsText} numberOfLines={1}>
+                {searchScope === 'nearby'
+                  ? `${selectedCity.name} (${selectedCity.latitude.toFixed(2)}°, ${selectedCity.longitude.toFixed(2)}°)`
+                  : 'Worldwide (Global)'}
+              </Text>
+            </View>
+
+            {conversation.length > 0 && (
+              <TouchableOpacity
+                style={styles.reSearchBtn}
+                onPress={() =>
+                  handleRerunQueryWithRadius(
+                    searchScope === 'nearby' ? radiusKm : null,
+                    selectedCity,
+                    searchScope
+                  )
+                }
+                activeOpacity={0.8}
+                disabled={isSearching}
+              >
+                <Ionicons name="refresh" size={12} color="#FFFFFF" />
+                <Text style={styles.reSearchBtnText}>Re-search</Text>
+              </TouchableOpacity>
+            )}
           </View>
 
-          {/* Preset Radius Pills (0 to 15 km) */}
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.radiusPillsRow}
-          >
-            {[
-              { label: '🌐 Global', value: null },
-              { label: '1 km', value: 1 },
-              { label: '3 km', value: 3 },
-              { label: '5 km', value: 5 },
-              { label: '10 km', value: 10 },
-              { label: '15 km', value: 15 },
-            ].map((p) => {
-              const isActive =
-                (p.value === null && radiusKm === null) ||
-                (p.value !== null && radiusKm === p.value);
-              return (
-                <TouchableOpacity
-                  key={p.label}
-                  style={[styles.radiusPill, isActive && styles.radiusPillActive]}
-                  onPress={() => {
-                    setRadiusKm(p.value);
-                    if (conversation.length > 0) {
-                      handleRerunQueryWithRadius(p.value, locationQuery.trim() || selectedPlace);
-                    }
-                  }}
-                  activeOpacity={0.8}
-                >
-                  <Text
-                    style={[
-                      styles.radiusPillText,
-                      isActive && styles.radiusPillTextActive,
-                    ]}
-                  >
-                    {p.label}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </ScrollView>
+          {/* City Selection Options: directly near/under the Nearby button */}
+          {searchScope === 'nearby' && (
+            <View style={styles.citySelectionContainer}>
+              <View style={styles.citySelectionHeader}>
+                <Ionicons name="business-outline" size={13} color="#4A6B53" />
+                <Text style={styles.citySelectionLabel}>Choose City:</Text>
+              </View>
 
-          {/* Stepper + Place Chips when radius is active */}
-          {radiusKm !== null && (
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.cityScrollRow}
+              >
+                {PRESET_CITIES.map((city) => {
+                  const isCityActive = selectedCity.id === city.id;
+                  return (
+                    <TouchableOpacity
+                      key={city.id}
+                      style={[
+                        styles.cityChip,
+                        isCityActive && styles.cityChipActive,
+                      ]}
+                      onPress={() => {
+                        setSelectedCity(city);
+                        if (conversation.length > 0) {
+                          handleRerunQueryWithRadius(radiusKm, city, 'nearby');
+                        }
+                      }}
+                      activeOpacity={0.8}
+                    >
+                      <Ionicons
+                        name={isCityActive ? 'location' : 'location-outline'}
+                        size={12}
+                        color={isCityActive ? '#FFFFFF' : '#4A6B53'}
+                      />
+                      <Text
+                        style={[
+                          styles.cityChipText,
+                          isCityActive && styles.cityChipTextActive,
+                        ]}
+                      >
+                        {city.name}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            </View>
+          )}
+
+          {/* Preset Radius Pills (0 to 15 km) & Stepper */}
+          {searchScope === 'nearby' && (
             <View style={styles.activeRadiusSection}>
+              {/* Radius Pills */}
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.radiusPillsRow}
+              >
+                <Text style={styles.radiusLabel}>Radius:</Text>
+                {[1, 3, 5, 10, 15].map((val) => {
+                  const isActive = radiusKm === val;
+                  return (
+                    <TouchableOpacity
+                      key={val}
+                      style={[
+                        styles.radiusPill,
+                        isActive && styles.radiusPillActive,
+                      ]}
+                      onPress={() => {
+                        setRadiusKm(val);
+                        if (conversation.length > 0) {
+                          handleRerunQueryWithRadius(val, selectedCity, 'nearby');
+                        }
+                      }}
+                      activeOpacity={0.8}
+                    >
+                      <Text
+                        style={[
+                          styles.radiusPillText,
+                          isActive && styles.radiusPillTextActive,
+                        ]}
+                      >
+                        {val} km
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+
               {/* Stepper Slider Bar */}
               <View style={styles.stepperRow}>
                 <TouchableOpacity
                   style={[styles.stepBtn, radiusKm <= 1 && styles.stepBtnDisabled]}
                   onPress={() => {
-                    const nextVal = Math.max(1, (radiusKm || 1) - 1);
+                    const nextVal = Math.max(1, radiusKm - 1);
                     setRadiusKm(nextVal);
                     if (conversation.length > 0) {
-                      handleRerunQueryWithRadius(nextVal, locationQuery.trim() || selectedPlace);
+                      handleRerunQueryWithRadius(nextVal, selectedCity, 'nearby');
                     }
                   }}
                   disabled={radiusKm <= 1}
@@ -433,17 +550,17 @@ export const VaultScreen: React.FC<VaultProps> = ({
                     />
                   </View>
                   <Text style={styles.sliderValueText}>
-                    📍 {radiusKm} km radius (0 to 15 km range)
+                    📍 {radiusKm} km radius around {selectedCity.name}
                   </Text>
                 </View>
 
                 <TouchableOpacity
                   style={[styles.stepBtn, radiusKm >= 15 && styles.stepBtnDisabled]}
                   onPress={() => {
-                    const nextVal = Math.min(15, (radiusKm || 1) + 1);
+                    const nextVal = Math.min(15, radiusKm + 1);
                     setRadiusKm(nextVal);
                     if (conversation.length > 0) {
-                      handleRerunQueryWithRadius(nextVal, locationQuery.trim() || selectedPlace);
+                      handleRerunQueryWithRadius(nextVal, selectedCity, 'nearby');
                     }
                   }}
                   disabled={radiusKm >= 15}
@@ -452,56 +569,50 @@ export const VaultScreen: React.FC<VaultProps> = ({
                 </TouchableOpacity>
               </View>
 
-              {/* Quick Place Selection Chips */}
-              <View style={styles.placeChipsRow}>
-                <Text style={styles.placeChipsLabel}>Center on:</Text>
-                {['Dehradun', 'Goa', 'Pune', 'Delhi', 'Indiranagar'].map((city) => (
-                  <TouchableOpacity
-                    key={city}
-                    style={[
-                      styles.placeChip,
-                      locationQuery === city && styles.placeChipActive,
-                    ]}
-                    onPress={() => {
-                      setSelectedPlace(city);
-                      setLocationQuery(city);
-                      if (conversation.length > 0) {
-                        handleRerunQueryWithRadius(radiusKm, city);
-                      }
-                    }}
-                  >
-                    <Text
-                      style={[
-                        styles.placeChipText,
-                        locationQuery === city && styles.placeChipTextActive,
-                      ]}
-                    >
-                      {city}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-
-              {/* Custom Location Text Input */}
+              {/* Custom Location Input */}
               <View style={styles.customLocationInputBox}>
-                <Ionicons name="location-outline" size={15} color="#4A6B53" />
+                <Ionicons name="search-outline" size={14} color="#4A6B53" />
                 <TextInput
-                  value={locationQuery}
-                  onChangeText={setLocationQuery}
+                  value={customLocationText}
+                  onChangeText={setCustomLocationText}
+                  placeholder={`Custom landmark or place in ${selectedCity.name}...`}
+                  placeholderTextColor="#8A9E8F"
+                  style={styles.customLocationInput}
                   onSubmitEditing={() => {
-                    if (conversation.length > 0) {
-                      handleRerunQueryWithRadius(radiusKm, locationQuery.trim() || selectedPlace);
+                    if (customLocationText.trim()) {
+                      const customCity: CityOption = {
+                        id: 'custom',
+                        name: customLocationText.trim(),
+                        state: selectedCity.state,
+                        latitude: selectedCity.latitude,
+                        longitude: selectedCity.longitude,
+                      };
+                      setSelectedCity(customCity);
+                      if (conversation.length > 0) {
+                        handleRerunQueryWithRadius(radiusKm, customCity, 'nearby');
+                      }
                     }
                   }}
                   returnKeyType="search"
-                  placeholder="Or enter custom place (e.g. Dehradun, Goa, Pune)"
-                  placeholderTextColor="#8A9E8F"
-                  style={styles.customLocationInput}
                 />
-                {conversation.length > 0 && (
+                {customLocationText.trim().length > 0 && (
                   <TouchableOpacity
                     style={styles.customLocationApplyBtn}
-                    onPress={() => handleRerunQueryWithRadius(radiusKm, locationQuery.trim() || selectedPlace)}
+                    onPress={() => {
+                      if (customLocationText.trim()) {
+                        const customCity: CityOption = {
+                          id: 'custom',
+                          name: customLocationText.trim(),
+                          state: selectedCity.state,
+                          latitude: selectedCity.latitude,
+                          longitude: selectedCity.longitude,
+                        };
+                        setSelectedCity(customCity);
+                        if (conversation.length > 0) {
+                          handleRerunQueryWithRadius(radiusKm, customCity, 'nearby');
+                        }
+                      }
+                    }}
                     activeOpacity={0.8}
                   >
                     <Text style={styles.customLocationApplyText}>Apply</Text>
@@ -526,7 +637,7 @@ export const VaultScreen: React.FC<VaultProps> = ({
               <View style={styles.emptyIconCircle}>
                 <Ionicons name="sparkles" size={32} color="#4A6B53" />
               </View>
-              <Text style={styles.emptyTitle}>Ask Your Memories</Text>
+              <Text style={styles.emptyTitle}>MindSeek Search</Text>
               <Text style={styles.emptySubtitle}>
                 Ask natural questions about your past voice memos, photos, places, conversations, and notes.
               </Text>
@@ -535,7 +646,7 @@ export const VaultScreen: React.FC<VaultProps> = ({
                 <Text style={styles.suggestionsHeader}>SUGGESTED QUESTIONS</Text>
                 {SUGGESTED_QUERIES.map((sq, idx) => (
                   <TouchableOpacity
-                    key={idx}
+                    key={`sq-${idx}-${sq.slice(0, 15)}`}
                     style={styles.suggestionChip}
                     onPress={() => handleSendQuery(sq)}
                     activeOpacity={0.8}
@@ -670,7 +781,7 @@ export const VaultScreen: React.FC<VaultProps> = ({
 
                             return (
                               <TouchableOpacity
-                                key={item.memory_id || sIdx}
+                                key={item.memory_id || `turn-${turn.id}-res-${sIdx}`}
                                 onPress={() => {
                                   const converted = convertSearchResultToMemoryItem(item);
                                   onSelectMemory(converted);
@@ -812,7 +923,7 @@ export const VaultScreen: React.FC<VaultProps> = ({
               onChangeText={setInputText}
               onSubmitEditing={() => handleSendQuery()}
               returnKeyType="send"
-              placeholder="Ask anything about your memories..."
+              placeholder="Ask anything about your memories with MindSeek..."
               placeholderTextColor="#8A9E8F"
               style={styles.textInput}
               editable={!isSearching}
@@ -1339,25 +1450,104 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    flexWrap: 'wrap',
+    gap: 8,
   },
-  radiusTitleGroup: {
+  scopeToggleRow: {
+    flexDirection: 'row',
+    backgroundColor: '#EBE5D8',
+    borderRadius: 16,
+    padding: 2,
+    gap: 2,
+  },
+  scopeModeBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    borderRadius: 14,
+  },
+  scopeModeBtnActive: {
+    backgroundColor: '#2D5A3D',
+  },
+  scopeModeText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#5E7A64',
+  },
+  scopeModeTextActive: {
+    color: '#FFFFFF',
+  },
+  activeCoordsBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#E2EFE5',
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+    maxWidth: 240,
+  },
+  activeCoordsText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#2D5A3D',
+  },
+  citySelectionContainer: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    padding: 8,
+    borderWidth: 1,
+    borderColor: '#D5CDBC',
+    gap: 6,
+  },
+  citySelectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingLeft: 4,
+  },
+  citySelectionLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#4A6B53',
+  },
+  cityScrollRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    flex: 1,
   },
-  radiusTitleText: {
-    fontSize: 12,
+  cityChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 10,
+    backgroundColor: '#FAF7F0',
+    borderWidth: 1,
+    borderColor: '#D5CDBC',
+  },
+  cityChipActive: {
+    backgroundColor: '#2D5A3D',
+    borderColor: '#2D5A3D',
+  },
+  cityChipText: {
+    fontSize: 11,
     fontWeight: '700',
-    color: '#1E3524',
+    color: '#4A6B53',
+  },
+  cityChipTextActive: {
+    color: '#FFFFFF',
   },
   reSearchBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
     backgroundColor: '#2D5A3D',
-    paddingVertical: 4,
-    paddingHorizontal: 9,
+    paddingVertical: 5,
+    paddingHorizontal: 10,
     borderRadius: 8,
   },
   reSearchBtnText: {
@@ -1367,8 +1557,8 @@ const styles = StyleSheet.create({
   },
   customLocationApplyBtn: {
     backgroundColor: '#4A6B53',
-    paddingVertical: 4,
-    paddingHorizontal: 8,
+    paddingVertical: 5,
+    paddingHorizontal: 10,
     borderRadius: 6,
   },
   customLocationApplyText: {
@@ -1376,32 +1566,20 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#FFFFFF',
   },
-  radiusToggleBtn: {
-    paddingVertical: 4,
-    paddingHorizontal: 8,
-    borderRadius: 8,
-    backgroundColor: '#EDE7DC',
-  },
-  radiusToggleBtnActive: {
-    backgroundColor: '#E2EFE5',
-  },
-  radiusToggleText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#5E7A64',
-  },
-  radiusToggleTextActive: {
-    color: '#2D5A3D',
-  },
   radiusPillsRow: {
     flexDirection: 'row',
     gap: 8,
     alignItems: 'center',
   },
+  radiusLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#5E7A64',
+  },
   radiusPill: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 14,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 12,
     backgroundColor: '#FFFFFF',
     borderWidth: 1,
     borderColor: '#D5CDBC',
@@ -1411,7 +1589,7 @@ const styles = StyleSheet.create({
     borderColor: '#4A6B53',
   },
   radiusPillText: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '700',
     color: '#5E7A64',
   },
@@ -1419,7 +1597,6 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
   },
   activeRadiusSection: {
-    marginTop: 4,
     padding: 10,
     borderRadius: 12,
     backgroundColor: '#F3EFE6',
@@ -1465,37 +1642,6 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#2D5A3D',
     textAlign: 'center',
-  },
-  placeChipsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flexWrap: 'wrap',
-    gap: 6,
-  },
-  placeChipsLabel: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#5E7A64',
-  },
-  placeChip: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 8,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#D5CDBC',
-  },
-  placeChipActive: {
-    backgroundColor: '#2D5A3D',
-    borderColor: '#2D5A3D',
-  },
-  placeChipText: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#4A6B53',
-  },
-  placeChipTextActive: {
-    color: '#FFFFFF',
   },
   customLocationInputBox: {
     flexDirection: 'row',
